@@ -122,7 +122,7 @@ async function buildZipBlob(files: Record<string, string>): Promise<Blob> {
   eocdView.setUint16(20, 0, true); // comment length
   parts.push(eocd);
 
-  return new Blob(parts, { type: "application/zip" });
+  return new Blob(parts as BlobPart[], { type: "application/zip" });
 }
 
 /**
