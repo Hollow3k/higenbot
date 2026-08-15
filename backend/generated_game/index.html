@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Snake Odyssey - Retro Arcade Survival</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #080710;
+      color: #fff;
+      font-family: 'Courier New', Courier, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    #game-container {
+      position: relative;
+      box-shadow: 0 0 40px rgba(0, 255, 200, 0.25), 0 0 80px rgba(255, 0, 128, 0.15);
+      border: 3px solid #00f0ff;
+      border-radius: 8px;
+      background: #0a0a14;
+    }
+    canvas { display: block; image-rendering: pixelated; }
+    .hint {
+      margin-top: 10px;
+      font-size: 13px;
+      letter-spacing: 2px;
+      color: #00f0ff;
+      text-shadow: 0 0 8px #00f0ff;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game" width="800" height="600"></canvas>
+  </div>
+  <div class="hint">WASD / ARROWS : STEER &bull; SPACE : PAUSE &bull; TARGET: 1000 PTS OR SURVIVE</div>
+  <script type="module" src="dist/main.js"></script>
+</body>
+</html>

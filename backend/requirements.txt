@@ -6,3 +6,7 @@ sqlalchemy[asyncio]
 asyncpg
 alembic
 python-jose[cryptography]
+langgraph
+langchain
+langchain-core
+langchain-groq
