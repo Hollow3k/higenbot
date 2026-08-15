@@ -6,13 +6,15 @@
  * Server streams these typed events back.
  */
 
-export enum WsMessageType {
-  AgentStart = "agent_start",
-  AgentDone = "agent_done",
-  FileWritten = "file_written",
-  RunComplete = "run_complete",
-  RunError = "run_error",
-}
+export const WsMessageType = {
+  AgentStart: "agent_start",
+  AgentDone: "agent_done",
+  FileWritten: "file_written",
+  RunComplete: "run_complete",
+  RunError: "run_error",
+} as const;
+
+export type WsMessageType = (typeof WsMessageType)[keyof typeof WsMessageType];
 
 export type AgentName =
   | "creative_director"
@@ -23,33 +25,33 @@ export type AgentName =
 // ── Event payloads ──────────────────────────────────────────────────────────
 
 export interface AgentStartEvent {
-  type: WsMessageType.AgentStart;
+  type: typeof WsMessageType.AgentStart;
   agent: AgentName;
   timestamp: string;
 }
 
 export interface AgentDoneEvent {
-  type: WsMessageType.AgentDone;
+  type: typeof WsMessageType.AgentDone;
   agent: AgentName;
   output: Record<string, unknown>;
   timestamp: string;
 }
 
 export interface FileWrittenEvent {
-  type: WsMessageType.FileWritten;
+  type: typeof WsMessageType.FileWritten;
   path: string;
   content: string;
   timestamp: string;
 }
 
 export interface RunCompleteEvent {
-  type: WsMessageType.RunComplete;
+  type: typeof WsMessageType.RunComplete;
   qa_passed: boolean;
   timestamp: string;
 }
 
 export interface RunErrorEvent {
-  type: WsMessageType.RunError;
+  type: typeof WsMessageType.RunError;
   message: string;
   timestamp: string;
 }
