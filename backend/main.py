@@ -282,3 +282,237 @@ async def websocket_run(websocket: WebSocket, run_id: str):
             await websocket.close()
         except Exception:
             pass
+
+
+# ── WebSocket: edit game via chat ─────────────────────────────────────────────
+
+@app.websocket("/ws/edit/{run_id}")
+async def websocket_edit(websocket: WebSocket, run_id: str):
+    """
+    WebSocket endpoint for iterative game editing via chat.
+
+    Client sends messages with the current files and a change request:
+        { "message": "make the player faster", "files": { "src/main.ts": "..." } }
+
+    Server responds with updated files:
+        { "type": "edit_start", "timestamp": "..." }
+        { "type": "file_written", "path": "...", "content": "...", "timestamp": "..." }
+        { "type": "edit_done", "timestamp": "..." }
+        { "type": "edit_error", "message": "...", "timestamp": "..." }
+
+    The connection stays open for multiple back-and-forth messages.
+    """
+    await websocket.accept()
+
+    # Lazy import to avoid circular deps
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from agents.nodes import programmer_llm, run_qa_check
+
+    # Conversation history for multi-turn context
+    conversation: list = []
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            payload = json.loads(data)
+
+            message = payload.get("message", "")
+            files = payload.get("files", {})
+
+            if not message:
+                await _send(websocket, {
+                    "type": "edit_error",
+                    "message": "No message provided",
+                    "timestamp": _ts(),
+                })
+                continue
+
+            await _send(websocket, {
+                "type": "edit_start",
+                "timestamp": _ts(),
+            })
+
+            # Build the prompt with current files as context
+            files_context = ""
+            for path, content in files.items():
+                files_context += f"\n--- {path} ---\n{content}\n"
+
+            system_prompt = (
+                "You are a game developer assistant. The user has a working HTML5 Canvas + TypeScript game. "
+                "They want to make changes to it. You will receive the current files and a change request.\n\n"
+                "Rules:\n"
+                "- Output ONLY the complete updated file contents\n"
+                "- Format your response as one or more file blocks like this:\n"
+                "--- path/to/file.ts ---\n"
+                "file content here\n"
+                "--- end ---\n\n"
+                "- Only include files that changed\n"
+                "- Make sure the game still works after your changes\n"
+                "- Keep changes minimal and focused on what the user asked for"
+            )
+
+            user_msg = f"Current files:\n{files_context}\n\nRequested change: {message}"
+
+            # Build messages (include conversation history for context)
+            messages = [SystemMessage(content=system_prompt)]
+            messages.extend(conversation)
+            messages.append(HumanMessage(content=user_msg))
+
+            try:
+                response = programmer_llm.invoke(messages)
+                response_text = response.content
+
+                # Handle Gemini returning content as list of parts
+                if isinstance(response_text, list):
+                    response_text = "".join(
+                        part.get("text", "") if isinstance(part, dict) else str(part)
+                        for part in response_text
+                    )
+
+                # Parse the response into file blocks
+                updated_files = _parse_file_blocks(response_text)
+
+                if not updated_files:
+                    await _send(websocket, {
+                        "type": "edit_error",
+                        "message": "Could not parse file changes from response",
+                        "timestamp": _ts(),
+                    })
+                else:
+                    # Merge updated files with existing files for QA
+                    merged_files = {**files, **updated_files}
+
+                    # Run QA check
+                    qa_report = run_qa_check(merged_files)
+
+                    if qa_report.passed:
+                        for path, content in updated_files.items():
+                            await _send(websocket, {
+                                "type": "file_written",
+                                "path": path,
+                                "content": content,
+                                "timestamp": _ts(),
+                            })
+
+                        await _send(websocket, {
+                            "type": "edit_done",
+                            "timestamp": _ts(),
+                        })
+                    else:
+                        # Retry once with errors fed back
+                        error_context = "\n".join(qa_report.errors[:10])
+                        retry_msg = (
+                            f"The changes produced TypeScript errors:\n{error_context}\n\n"
+                            f"Fix these errors. Here are the files again:\n"
+                        )
+                        for path, content in merged_files.items():
+                            retry_msg += f"\n--- {path} ---\n{content}\n"
+
+                        retry_messages = [SystemMessage(content=system_prompt)]
+                        retry_messages.extend(conversation)
+                        retry_messages.append(HumanMessage(content=retry_msg))
+
+                        retry_response = programmer_llm.invoke(retry_messages)
+                        retry_text = retry_response.content
+                        if isinstance(retry_text, list):
+                            retry_text = "".join(
+                                part.get("text", "") if isinstance(part, dict) else str(part)
+                                for part in retry_text
+                            )
+
+                        retry_files = _parse_file_blocks(retry_text)
+                        if retry_files:
+                            for path, content in retry_files.items():
+                                await _send(websocket, {
+                                    "type": "file_written",
+                                    "path": path,
+                                    "content": content,
+                                    "timestamp": _ts(),
+                                })
+                            await _send(websocket, {
+                                "type": "edit_done",
+                                "timestamp": _ts(),
+                            })
+                            response_text = retry_text
+                        else:
+                            # Send the original files anyway with a warning
+                            for path, content in updated_files.items():
+                                await _send(websocket, {
+                                    "type": "file_written",
+                                    "path": path,
+                                    "content": content,
+                                    "timestamp": _ts(),
+                                })
+                            await _send(websocket, {
+                                "type": "edit_done",
+                                "timestamp": _ts(),
+                            })
+
+                # Keep conversation history (trimmed to last 6 exchanges)
+                conversation.append(HumanMessage(content=user_msg))
+                from langchain_core.messages import AIMessage
+                conversation.append(AIMessage(content=response_text))
+                if len(conversation) > 12:
+                    conversation = conversation[-12:]
+
+            except Exception as e:
+                await _send(websocket, {
+                    "type": "edit_error",
+                    "message": str(e),
+                    "timestamp": _ts(),
+                })
+
+    except WebSocketDisconnect:
+        pass
+
+    except Exception as e:
+        try:
+            await _send(websocket, {
+                "type": "edit_error",
+                "message": str(e),
+                "timestamp": _ts(),
+            })
+        except Exception:
+            pass
+
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+def _parse_file_blocks(text: str) -> dict[str, str]:
+    """Parse file blocks from LLM response in the format:
+    --- path/to/file ---
+    content
+    --- end ---
+    """
+    import re
+    files: dict[str, str] = {}
+
+    # Pattern: --- filepath --- \n content \n --- end ---
+    pattern = r"---\s+(.+?)\s+---\n(.*?)\n---\s*end\s*---"
+    matches = re.findall(pattern, text, re.DOTALL)
+
+    if matches:
+        for path, content in matches:
+            path = path.strip()
+            files[path] = content.strip()
+    else:
+        # Fallback: try to find ```filename patterns
+        code_pattern = r"```(?:\w+)?\s*\n?//\s*(.+?)\n(.*?)```"
+        code_matches = re.findall(code_pattern, text, re.DOTALL)
+        if code_matches:
+            for path, content in code_matches:
+                path = path.strip()
+                files[path] = content.strip()
+        else:
+            # Last fallback: look for file paths as headers
+            block_pattern = r"(?:^|\n)#+\s*`?([^\n`]+\.\w+)`?\s*\n```\w*\n(.*?)```"
+            block_matches = re.findall(block_pattern, text, re.DOTALL)
+            for path, content in block_matches:
+                path = path.strip()
+                files[path] = content.strip()
+
+    return files

@@ -8,6 +8,7 @@ import { FileExplorer } from "../components/FileExplorer";
 import { CodeViewer } from "../components/CodeViewer";
 import { PreviewPane } from "../components/PreviewPane";
 import { PromptInput } from "../components/PromptInput";
+import { ChatPane } from "../components/ChatPane";
 
 export default function StudioPage() {
   const { runId } = useParams();
@@ -90,9 +91,14 @@ export default function StudioPage() {
                   <CodeViewer />
                 </div>
 
-                {/* Right: preview */}
-                <div className="flex w-1/2 border-l border-zinc-800">
+                {/* Right: preview + chat */}
+                <div className="flex flex-col w-1/2 border-l border-zinc-800">
                   <PreviewPane />
+                  {runStatus === "done" && (
+                    <div className="h-64 border-t border-zinc-800">
+                      <ChatPane />
+                    </div>
+                  )}
                 </div>
               </div>
             )}

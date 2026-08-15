@@ -322,6 +322,63 @@ def qa_tester_node(state: GraphState) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Standalone QA check (reusable outside the graph)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def run_qa_check(files: dict[str, str]) -> QAReport:
+    """Run tsc --noEmit on a set of files and return a QAReport. Usable outside the graph."""
+    if not files:
+        return QAReport(passed=False, errors=["No files provided"], suggestions=[])
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for rel_path, content in files.items():
+            full_path = Path(tmpdir) / rel_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
+
+        tsconfig_path = Path(tmpdir) / "tsconfig.json"
+        if not tsconfig_path.exists():
+            tsconfig_path.write_text(json.dumps({
+                "compilerOptions": {
+                    "target": "ES2020",
+                    "module": "ES2020",
+                    "lib": ["ES2020", "DOM"],
+                    "strict": True,
+                    "noEmit": True,
+                    "esModuleInterop": True,
+                    "skipLibCheck": True,
+                    "forceConsistentCasingInFileNames": True,
+                },
+                "include": ["src/**/*.ts"],
+            }, indent=2), encoding="utf-8")
+
+        try:
+            result = subprocess.run(
+                ["npx", "tsc", "--noEmit"],
+                cwd=tmpdir,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                shell=True,
+            )
+            tsc_output = result.stdout + result.stderr
+            tsc_errors = [
+                line.strip()
+                for line in tsc_output.splitlines()
+                if line.strip() and "error TS" in line
+            ]
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            tsc_errors = [f"Failed to run tsc: {str(e)}"]
+
+    passed = len(tsc_errors) == 0
+    suggestions = []
+    if not passed:
+        suggestions = ["Fix the TypeScript errors and try again"]
+
+    return QAReport(passed=passed, errors=tsc_errors, suggestions=suggestions)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Conditional router for QA → END or QA → programmer
 # ─────────────────────────────────────────────────────────────────────────────
 

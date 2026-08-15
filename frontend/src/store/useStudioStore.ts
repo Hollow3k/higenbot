@@ -15,6 +15,7 @@ interface StudioState {
   runStatus: RunStatus;
   currentAgent: AgentName | null;
   prompt: string;
+  runId: string | null;
 
   // Generated output
   files: Record<string, string>;
@@ -29,6 +30,7 @@ interface StudioState {
 
   // Actions
   setPrompt: (prompt: string) => void;
+  setRunId: (runId: string) => void;
   startRun: () => void;
   handleEvent: (event: WsEvent) => void;
   selectFile: (path: string | null) => void;
@@ -38,10 +40,11 @@ interface StudioState {
 let logId = 0;
 const nextId = () => String(++logId);
 
-export const useStudioStore = create<StudioState>((set) => ({
+export const useStudioStore = create<StudioState>((set, get) => ({
   runStatus: "idle",
   currentAgent: null,
   prompt: "",
+  runId: null,
   files: {},
   selectedFile: null,
   log: [],
@@ -49,6 +52,8 @@ export const useStudioStore = create<StudioState>((set) => ({
   errorMessage: null,
 
   setPrompt: (prompt) => set({ prompt }),
+
+  setRunId: (runId) => set({ runId }),
 
   startRun: () =>
     set({
