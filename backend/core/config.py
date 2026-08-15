@@ -42,10 +42,11 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed origins for CORS.
     # In development this is overridden by the explicit list in main.py; you
     # can also set it here for production (e.g. "https://higenbot.vercel.app").
-    ALLOWED_ORIGINS: list[str] = [
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:4173",  # Vite preview
-    ]
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:4173"
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
 
     # ── App metadata ────────────────────────────────────────────────────────
     APP_ENV: str = "development"  # "development" | "production"
