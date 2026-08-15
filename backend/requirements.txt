@@ -10,3 +10,5 @@ langgraph
 langchain
 langchain-core
 langchain-groq
+langchain-google-genai
+langchain-openai
