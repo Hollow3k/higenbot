@@ -4,7 +4,7 @@ import { useStudioWebSocket } from "../hooks/useStudioWebSocket";
 import { apiFetch } from "../lib/api";
 
 export function PromptInput() {
-  const { setPrompt, runStatus } = useStudioStore();
+  const { setPrompt, setRunId, runStatus } = useStudioStore();
   const { connect } = useStudioWebSocket();
   const [input, setInput] = useState("");
 
@@ -32,6 +32,7 @@ export function PromptInput() {
       // Fall through with generated runId — works without DB
     }
 
+    setRunId(runId);
     connect(runId, trimmed);
   };
 

@@ -16,9 +16,17 @@ export default function StudioPage() {
   const { connect } = useStudioWebSocket();
   const runStatus = useStudioStore((s) => s.runStatus);
   const setPrompt = useStudioStore((s) => s.setPrompt);
+  const reset = useStudioStore((s) => s.reset);
   const hasFiles = useStudioStore(
     (s) => Object.keys(s.files).length > 0
   );
+
+  // Reset store when navigating to /studio without a runId (new game)
+  useEffect(() => {
+    if (!runId) {
+      reset();
+    }
+  }, [runId, reset]);
 
   // Auto-start if navigated from projects page with a prompt in state
   useEffect(() => {

@@ -30,14 +30,14 @@ if os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
 
 # ── LLM instances ───────────────────────────────────────────────────────────
 llm = init_chat_model(
-    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
     model_provider="groq",
     max_tokens=4096,
 )
 
-# Programmer uses Gemini (better for code generation)
+# Programmer uses Gemini (higher token limits for code generation)
 programmer_llm = init_chat_model(
-    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
     model_provider="google_genai",
     max_tokens=8192,
 )

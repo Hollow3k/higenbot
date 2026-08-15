@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../providers/AuthProvider";
 import { apiFetch } from "../lib/api";
+import { getLocalProjects } from "../lib/projectStorage";
 
 interface Project {
   id: string;
@@ -18,17 +19,37 @@ export default function ProjectsPage() {
 
   useEffect(() => {
     async function fetchProjects() {
+      // Always load from localStorage first
+      const local = getLocalProjects().map((p) => ({
+        id: p.id,
+        prompt: p.prompt,
+        status: p.status,
+        created_at: p.created_at,
+      }));
+
+      // Try API as well
       try {
         const res = await apiFetch("/api/projects/");
         if (res.ok) {
           const data = await res.json();
-          setProjects(data.projects ?? []);
+          const apiProjects: Project[] = data.projects ?? [];
+          // Merge: API projects + local projects not already in API
+          const apiIds = new Set(apiProjects.map((p) => p.id));
+          const merged = [
+            ...apiProjects,
+            ...local.filter((p) => !apiIds.has(p.id)),
+          ];
+          setProjects(merged);
+          setLoading(false);
+          return;
         }
       } catch {
-        // silently fail
-      } finally {
-        setLoading(false);
+        // API unavailable
       }
+
+      // Fallback to localStorage only
+      setProjects(local);
+      setLoading(false);
     }
     fetchProjects();
   }, []);

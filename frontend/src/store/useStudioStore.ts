@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { AgentName, WsEvent } from "../types/ws";
+import { saveLocalProject } from "../lib/projectStorage";
 
 export type RunStatus = "idle" | "running" | "done" | "error";
 
@@ -112,7 +113,19 @@ export const useStudioStore = create<StudioState>((set, get) => ({
             ],
           };
 
-        case "run_complete":
+        case "run_complete": {
+          // Save to localStorage
+          const { runId, prompt, files } = get();
+          if (runId && prompt) {
+            saveLocalProject({
+              id: runId,
+              prompt,
+              status: event.qa_passed ? "done" : "error",
+              created_at: new Date().toISOString(),
+              files: { ...files, ...state.files },
+            });
+          }
+
           return {
             runStatus: "done",
             currentAgent: null,
@@ -129,8 +142,21 @@ export const useStudioStore = create<StudioState>((set, get) => ({
               },
             ],
           };
+        }
 
-        case "run_error":
+        case "run_error": {
+          // Save error to localStorage
+          const { runId: rId, prompt: p } = get();
+          if (rId && p) {
+            saveLocalProject({
+              id: rId,
+              prompt: p,
+              status: "error",
+              created_at: new Date().toISOString(),
+              files: {},
+            });
+          }
+
           return {
             runStatus: "error",
             currentAgent: null,
@@ -145,6 +171,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
               },
             ],
           };
+        }
 
         default:
           return {};
@@ -157,6 +184,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set({
       runStatus: "idle",
       currentAgent: null,
+      prompt: "",
+      runId: null,
       files: {},
       selectedFile: null,
       log: [],
