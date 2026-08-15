@@ -1,0 +1,171 @@
+import { create } from "zustand";
+import type { AgentName, WsEvent } from "../types/ws";
+
+export type RunStatus = "idle" | "running" | "done" | "error";
+
+export interface LogEntry {
+  id: string;
+  type: "agent_start" | "agent_done" | "file_written" | "info" | "error";
+  message: string;
+  timestamp: string;
+}
+
+interface StudioState {
+  // Run state
+  runStatus: RunStatus;
+  currentAgent: AgentName | null;
+  prompt: string;
+
+  // Generated output
+  files: Record<string, string>;
+  selectedFile: string | null;
+
+  // Activity log
+  log: LogEntry[];
+
+  // QA
+  qaPassed: boolean | null;
+  errorMessage: string | null;
+
+  // Actions
+  setPrompt: (prompt: string) => void;
+  startRun: () => void;
+  handleEvent: (event: WsEvent) => void;
+  selectFile: (path: string | null) => void;
+  reset: () => void;
+}
+
+let logId = 0;
+const nextId = () => String(++logId);
+
+export const useStudioStore = create<StudioState>((set) => ({
+  runStatus: "idle",
+  currentAgent: null,
+  prompt: "",
+  files: {},
+  selectedFile: null,
+  log: [],
+  qaPassed: null,
+  errorMessage: null,
+
+  setPrompt: (prompt) => set({ prompt }),
+
+  startRun: () =>
+    set({
+      runStatus: "running",
+      currentAgent: null,
+      files: {},
+      selectedFile: null,
+      log: [],
+      qaPassed: null,
+      errorMessage: null,
+    }),
+
+  handleEvent: (event) =>
+    set((state) => {
+      switch (event.type) {
+        case "agent_start":
+          return {
+            currentAgent: event.agent,
+            log: [
+              ...state.log,
+              {
+                id: nextId(),
+                type: "agent_start",
+                message: `${formatAgent(event.agent)} started`,
+                timestamp: event.timestamp,
+              },
+            ],
+          };
+
+        case "agent_done":
+          return {
+            currentAgent: null,
+            log: [
+              ...state.log,
+              {
+                id: nextId(),
+                type: "agent_done",
+                message: `${formatAgent(event.agent)} finished`,
+                timestamp: event.timestamp,
+              },
+            ],
+          };
+
+        case "file_written":
+          return {
+            files: { ...state.files, [event.path]: event.content },
+            selectedFile: state.selectedFile ?? event.path,
+            log: [
+              ...state.log,
+              {
+                id: nextId(),
+                type: "file_written",
+                message: event.path,
+                timestamp: event.timestamp,
+              },
+            ],
+          };
+
+        case "run_complete":
+          return {
+            runStatus: "done",
+            currentAgent: null,
+            qaPassed: event.qa_passed,
+            log: [
+              ...state.log,
+              {
+                id: nextId(),
+                type: "info",
+                message: event.qa_passed
+                  ? "Build complete — QA passed"
+                  : "Build complete — QA failed",
+                timestamp: event.timestamp,
+              },
+            ],
+          };
+
+        case "run_error":
+          return {
+            runStatus: "error",
+            currentAgent: null,
+            errorMessage: event.message,
+            log: [
+              ...state.log,
+              {
+                id: nextId(),
+                type: "error",
+                message: event.message,
+                timestamp: event.timestamp,
+              },
+            ],
+          };
+
+        default:
+          return {};
+      }
+    }),
+
+  selectFile: (path) => set({ selectedFile: path }),
+
+  reset: () =>
+    set({
+      runStatus: "idle",
+      currentAgent: null,
+      files: {},
+      selectedFile: null,
+      log: [],
+      qaPassed: null,
+      errorMessage: null,
+    }),
+}));
+
+function formatAgent(name: AgentName): string {
+  const map: Record<AgentName, string> = {
+    creative_director: "Creative Director",
+    game_designer: "Game Designer",
+    gameplay_programmer: "Programmer",
+    qa_tester: "QA Tester",
+  };
+  return map[name] ?? name;
+}

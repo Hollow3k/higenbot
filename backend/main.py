@@ -9,16 +9,20 @@ Start the server:
 
 import json
 import traceback
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 
 from core.config import settings
 from api.projects import router as projects_router
 from agents.graph import graph
+from db.database import get_sessionmaker
+from db.models import GeneratedFile, GenerationRun, Project
 
 app = FastAPI(
     title="HigenBot API",
@@ -132,6 +136,7 @@ async def websocket_run(websocket: WebSocket, run_id: str):
         # Track which agent is currently running to emit start/done events
         current_agent: str | None = None
         files_sent: set[str] = set()
+        files_sent_content: dict[str, str] = {}  # path → content for DB persistence
 
         async for event in graph.astream_events(initial_state, version="v2"):
             kind = event.get("event")
@@ -173,6 +178,7 @@ async def websocket_run(websocket: WebSocket, run_id: str):
                     for path, content in output["files"].items():
                         if path not in files_sent:
                             files_sent.add(path)
+                            files_sent_content[path] = content
                             await _send(websocket, {
                                 "type": "file_written",
                                 "path": path,
@@ -189,13 +195,49 @@ async def websocket_run(websocket: WebSocket, run_id: str):
                 current_agent = None
 
         # ── Run complete ─────────────────────────────────────────────
-        # After the stream finishes, get the final state by running once more
-        # Actually astream_events doesn't return final state directly,
-        # so we track it from the last qa_tester output
-        # We already sent all events, now send run_complete
+        # Save generated files to database if we have a valid run_id
+        qa_passed = True
+        try:
+            run_uuid = uuid.UUID(run_id)
+            sessionmaker = get_sessionmaker()
+            async with sessionmaker() as db:
+                # Check if this run exists in DB
+                run_result = await db.execute(
+                    select(GenerationRun).where(GenerationRun.id == run_uuid)
+                )
+                run = run_result.scalar_one_or_none()
+
+                if run:
+                    # Update run status
+                    run.status = "done"
+                    run.completed_at = datetime.now(timezone.utc)
+
+                    # Save generated files
+                    for path, content in files_sent_content.items():
+                        db.add(GeneratedFile(
+                            id=uuid.uuid4(),
+                            run_id=run.id,
+                            path=path,
+                            content=content,
+                            version=1,
+                        ))
+
+                    # Update project status
+                    project_result = await db.execute(
+                        select(Project).where(Project.id == run.project_id)
+                    )
+                    project = project_result.scalar_one_or_none()
+                    if project:
+                        project.status = "done"
+
+                    await db.commit()
+        except (ValueError, Exception):
+            # run_id might not be a valid UUID (e.g. test runs) — skip DB save
+            pass
+
         await _send(websocket, {
             "type": "run_complete",
-            "qa_passed": True,  # If we got here without error, last QA state was sent in agent_done
+            "qa_passed": qa_passed,
             "timestamp": _ts(),
         })
 
@@ -203,6 +245,28 @@ async def websocket_run(websocket: WebSocket, run_id: str):
         pass  # Client disconnected, nothing to do
 
     except Exception as e:
+        # Try to mark run as errored in DB
+        try:
+            run_uuid = uuid.UUID(run_id)
+            sessionmaker = get_sessionmaker()
+            async with sessionmaker() as db:
+                run_result = await db.execute(
+                    select(GenerationRun).where(GenerationRun.id == run_uuid)
+                )
+                run = run_result.scalar_one_or_none()
+                if run:
+                    run.status = "error"
+                    run.completed_at = datetime.now(timezone.utc)
+                    project_result = await db.execute(
+                        select(Project).where(Project.id == run.project_id)
+                    )
+                    project = project_result.scalar_one_or_none()
+                    if project:
+                        project.status = "error"
+                    await db.commit()
+        except Exception:
+            pass
+
         try:
             await _send(websocket, {
                 "type": "run_error",

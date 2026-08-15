@@ -37,7 +37,7 @@ llm = init_chat_model(
 
 # Programmer uses Gemini (better for code generation)
 programmer_llm = init_chat_model(
-    "gemini-3.7-flash",
+    "gemini-3.5-flash-lite",
     model_provider="google_genai",
     max_tokens=8192,
 )

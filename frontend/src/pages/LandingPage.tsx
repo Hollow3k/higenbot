@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { useAuth } from '../providers/AuthProvider'
 
 type AuthMode = 'sign-in' | 'sign-up'
 
 function LandingPage() {
-  const { signUp, signInWithPassword, signInWithGoogle } = useAuth()
+  const { signUp, signInWithPassword, signInWithGoogle, session, signOut } = useAuth()
+  const navigate = useNavigate()
   const [authOpen, setAuthOpen] = useState(false)
   const [authMode, setAuthMode] = useState<AuthMode>('sign-in')
   const [email, setEmail] = useState('')
@@ -13,6 +15,8 @@ function LandingPage() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  const isLoggedIn = !!session
 
   const openAuth = (mode: AuthMode) => {
     setAuthMode(mode)
@@ -57,6 +61,22 @@ function LandingPage() {
     }
   }
 
+  const handleHeroCta = () => {
+    if (isLoggedIn) {
+      navigate('/projects')
+    } else {
+      openAuth('sign-in')
+    }
+  }
+
+  const handleNavAuth = async () => {
+    if (isLoggedIn) {
+      await signOut()
+    } else {
+      openAuth('sign-in')
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#01061c] text-slate-100">
       <section className="relative h-screen w-full overflow-hidden">
@@ -95,16 +115,16 @@ function LandingPage() {
                 </a>
                 <button
                   type="button"
-                  onClick={() => openAuth('sign-in')}
-                  className="transition hover:text-slate-950"
+                  onClick={handleNavAuth}
+                  className="whitespace-nowrap transition hover:text-slate-950"
                 >
-                  Login
+                  {isLoggedIn ? 'SIGN OUT' : 'LOGIN'}
                 </button>
               </div>
             </nav>
           </header>
 
-          <section className="flex min-h-[calc(100vh-5rem)] items-center justify-center px-2 pb-10 sm:px-6">
+          <section className="flex min-h-[calc(100vh-5rem)] flex-col items-center justify-center px-2 pb-10 sm:px-6">
             <div className="max-w-screen text-center">
               <p className="font-baskerville text-[clamp(2rem,4.8vw,4.2rem)] font-bold italic leading-[1.08] tracking-[-0.03em] text-slate-950 drop-shadow-[0_1px_0_rgba(255,255,255,0.32)] sm:text-[clamp(2.3rem,4.2vw,4.6rem)]">
                 <span className="block">Every world begins as</span>
@@ -112,6 +132,14 @@ function LandingPage() {
                 <span className="block">gives it a chance to exist.</span>
               </p>
             </div>
+
+            <button
+              type="button"
+              onClick={handleHeroCta}
+              className="mt-10 rounded-full border border-slate-900/20 bg-slate-950 px-8 py-3 text-[11px] uppercase tracking-[0.18em] font-inter text-white shadow-lg transition hover:bg-slate-800 sm:text-xs"
+            >
+              {isLoggedIn ? 'ENTER STUDIO' : 'START NOW'}
+            </button>
           </section>
         </div>
       </section>
@@ -125,7 +153,7 @@ function LandingPage() {
             A prompt-to-game studio that works like a small production team.
           </h2>
           <p className="mt-4 text-sm leading-7 text-slate-300 sm:text-base">
-            The product turns a natural-language game idea into a playable Phaser + TypeScript project. The plan describes a Creative Director, Game Designer, Gameplay Programmer, and QA Tester working in sequence to turn one prompt into real files and a browser preview.
+            The product turns a natural-language game idea into a playable TypeScript + HTML5 Canvas project. A Creative Director, Game Designer, Gameplay Programmer, and QA Tester work in sequence to turn one prompt into real files and a browser preview.
           </p>
         </div>
 
@@ -143,7 +171,7 @@ function LandingPage() {
           <article className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-sm">
             <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/60 font-inter">03</p>
             <h3 className="mt-3 text-sm font-semibold text-slate-50">Generate files</h3>
-            <p className="mt-2 text-sm leading-7 text-slate-300">The programmer writes actual TypeScript and Phaser files.</p>
+            <p className="mt-2 text-sm leading-7 text-slate-300">The programmer writes actual TypeScript and Canvas files.</p>
           </article>
           <article className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-sm">
             <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/60 font-inter">04</p>
@@ -162,7 +190,7 @@ function LandingPage() {
           <article id="login" className="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-sm">
             <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/60 font-inter">What ships</p>
             <p className="mt-3 text-sm leading-7 text-slate-300">
-              The implementation plan points to a FastAPI backend, Supabase auth, WebSockets for live updates, and WebContainers for in-browser preview. This landing page keeps the tone minimal and simply introduces that workflow.
+              The implementation uses a FastAPI backend, Supabase auth, WebSockets for live updates, and in-browser TypeScript compilation for instant preview. This landing page introduces that workflow.
             </p>
           </article>
         </div>

@@ -3,65 +3,156 @@ api/projects.py
 ---------------
 Project-related API routes.
 
-Currently a stub — all endpoints return placeholder responses so the router
-can be wired up and tested end-to-end before the database layer (Phase 2) and
-agent pipeline (Phases 4-6) are built.
-
-Real implementations will be added phase by phase:
-  Phase 2 → persist/fetch projects from DB
-  Phase 5 → POST /projects triggers the generation run + opens WebSocket
+Handles creating projects, listing user projects, and fetching individual
+projects with their generated files.
 """
 
-from fastapi import APIRouter, Depends
+import uuid
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import get_current_user
+from db.database import get_db
+from db.models import GeneratedFile, GenerationRun, Project
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
+
+# ── Request/Response schemas ─────────────────────────────────────────────────
 
 class CreateProjectRequest(BaseModel):
     prompt: str
 
 
+class ProjectResponse(BaseModel):
+    id: str
+    prompt: str
+    status: str
+    created_at: str
+
+
+class ProjectDetailResponse(BaseModel):
+    id: str
+    prompt: str
+    status: str
+    created_at: str
+    files: dict[str, str]
+
+
+class CreateProjectResponse(BaseModel):
+    project_id: str
+    run_id: str
+
+
 # ── List all projects ────────────────────────────────────────────────────────
 
 @router.get("/", summary="List projects")
-async def list_projects(user_id: str = Depends(get_current_user)):
-    """
-    Return the authenticated user's projects.
+async def list_projects(
+    user_id: str = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the authenticated user's projects, newest first."""
+    result = await db.execute(
+        select(Project)
+        .where(Project.user_id == uuid.UUID(user_id))
+        .order_by(Project.created_at.desc())
+    )
+    projects = result.scalars().all()
 
-    TODO (Phase 2): query the DB for projects belonging to the current user.
-    """
-    return {"projects": [], "message": "stub — no DB yet"}
+    return {
+        "projects": [
+            ProjectResponse(
+                id=str(p.id),
+                prompt=p.prompt,
+                status=p.status,
+                created_at=p.created_at.isoformat() if p.created_at else "",
+            )
+            for p in projects
+        ]
+    }
 
 
-# ── Get a single project ─────────────────────────────────────────────────────
+# ── Get a single project with files ──────────────────────────────────────────
 
 @router.get("/{project_id}", summary="Get project")
-async def get_project(project_id: str, user_id: str = Depends(get_current_user)):
-    """
-    Return a single project by id.
+async def get_project(
+    project_id: str,
+    user_id: str = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a single project with its generated files."""
+    result = await db.execute(
+        select(Project).where(
+            Project.id == uuid.UUID(project_id),
+            Project.user_id == uuid.UUID(user_id),
+        )
+    )
+    project = result.scalar_one_or_none()
 
-    TODO (Phase 2): fetch from DB; raise 404 if not found or not owned by user.
-    """
-    return {"project_id": project_id, "message": "stub — no DB yet"}
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Get the latest run's files
+    run_result = await db.execute(
+        select(GenerationRun)
+        .where(GenerationRun.project_id == project.id)
+        .order_by(GenerationRun.started_at.desc())
+        .limit(1)
+    )
+    run = run_result.scalar_one_or_none()
+
+    files: dict[str, str] = {}
+    if run:
+        files_result = await db.execute(
+            select(GeneratedFile).where(GeneratedFile.run_id == run.id)
+        )
+        for f in files_result.scalars().all():
+            files[f.path] = f.content
+
+    return ProjectDetailResponse(
+        id=str(project.id),
+        prompt=project.prompt,
+        status=project.status,
+        created_at=project.created_at.isoformat() if project.created_at else "",
+        files=files,
+    )
 
 
-# ── Create a project + kick off a generation run ─────────────────────────────
+# ── Create a project + generation run ────────────────────────────────────────
 
 @router.post("/", summary="Create project", status_code=201)
-async def create_project(payload: CreateProjectRequest, user_id: str = Depends(get_current_user)):
+async def create_project(
+    payload: CreateProjectRequest,
+    user_id: str = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Accept a natural-language prompt, create a Project + GenerationRun row,
-    and return the run_id the frontend will use to open a WebSocket connection.
+    Create a Project + GenerationRun and return the run_id.
+    The frontend uses run_id to open the WebSocket connection.
+    """
+    project = Project(
+        id=uuid.uuid4(),
+        user_id=uuid.UUID(user_id),
+        prompt=payload.prompt,
+        status="running",
+    )
+    db.add(project)
 
-    TODO (Phase 2): insert Project + GenerationRun rows into DB.
-    TODO (Phase 5): start `graph.astream_events()` and wire to WebSocket.
-    """
-    return {
-        "project_id": "stub-project-id",
-        "run_id": "stub-run-id",
-        "message": "stub — agent pipeline not wired yet",
-        "prompt": payload.prompt,
-    }
+    run = GenerationRun(
+        id=uuid.uuid4(),
+        project_id=project.id,
+        status="running",
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+
+    await db.commit()
+
+    return CreateProjectResponse(
+        project_id=str(project.id),
+        run_id=str(run.id),
+    )
