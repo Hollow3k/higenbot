@@ -1,5 +1,7 @@
 # Higenbot
 
+🚀 **[Live Demo](https://higenbot.vercel.app)**
+
 A multi-agent platform that turns a text prompt into a playable browser game through collaborating AI agents with real-time streaming and iterative editing.
 
 > **Note:** The live demo uses free/low-cost LLM APIs, so generated game quality may vary. Locally with higher-tier models (Claude, GPT-4o, etc.) the output is significantly better.
