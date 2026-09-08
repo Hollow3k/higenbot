@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../providers/AuthProvider";
 import { apiFetch } from "../lib/api";
 import { getLocalProjects } from "../lib/projectStorage";
+import { DisclaimerModal } from "../components/DisclaimerModal";
 
 interface Project {
   id: string;
@@ -16,6 +17,7 @@ export default function ProjectsPage() {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showDisclaimer, setShowDisclaimer] = useState(false);
 
   useEffect(() => {
     async function fetchProjects() {
@@ -61,6 +63,15 @@ export default function ProjectsPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-inter">
+      {showDisclaimer && (
+        <DisclaimerModal
+          onConfirm={() => {
+            setShowDisclaimer(false);
+            navigate("/studio");
+          }}
+          onCancel={() => setShowDisclaimer(false)}
+        />
+      )}
       {/* Header */}
       <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
         <Link to="/" className="font-bm-hanna text-xl text-zinc-100">
@@ -81,12 +92,12 @@ export default function ProjectsPage() {
       <main className="max-w-2xl mx-auto px-6 py-10">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-lg font-medium">Your projects</h2>
-          <Link
-            to="/studio"
+          <button
+            onClick={() => setShowDisclaimer(true)}
             className="rounded-lg bg-white text-zinc-900 px-4 py-2 text-xs font-medium hover:opacity-90 transition-opacity"
           >
             + New game
-          </Link>
+          </button>
         </div>
 
         {loading ? (

@@ -8,12 +8,12 @@ export function PromptInput() {
   const { connect } = useStudioWebSocket();
   const [input, setInput] = useState("");
 
-  const isRunning = runStatus === "running";
+  const isBusy = runStatus === "connecting" || runStatus === "running";
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || isRunning) return;
+    if (!trimmed || isBusy) return;
 
     setPrompt(trimmed);
 
@@ -36,6 +36,12 @@ export function PromptInput() {
     connect(runId, trimmed);
   };
 
+  const buttonLabel = () => {
+    if (runStatus === "connecting") return "Connecting…";
+    if (runStatus === "running") return "Running…";
+    return "Generate";
+  };
+
   return (
     <form onSubmit={handleSubmit} className="flex items-center gap-2 px-4 py-3">
       <input
@@ -43,15 +49,18 @@ export function PromptInput() {
         value={input}
         onChange={(e) => setInput(e.target.value)}
         placeholder="Describe a game..."
-        disabled={isRunning}
+        disabled={isBusy}
         className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-zinc-500 disabled:opacity-50"
       />
       <button
         type="submit"
-        disabled={isRunning || !input.trim()}
-        className="shrink-0 rounded-lg bg-white text-zinc-900 px-4 py-2.5 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+        disabled={isBusy || !input.trim()}
+        className="shrink-0 flex items-center gap-2 rounded-lg bg-white text-zinc-900 px-4 py-2.5 text-sm font-medium transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
       >
-        {isRunning ? "Running..." : "Generate"}
+        {isBusy && (
+          <span className="w-3.5 h-3.5 border-2 border-zinc-400 border-t-zinc-800 rounded-full animate-spin" />
+        )}
+        {buttonLabel()}
       </button>
     </form>
   );

@@ -6,7 +6,7 @@ const WS_BASE = import.meta.env.VITE_WS_URL ?? "ws://127.0.0.1:8000";
 
 export function useStudioWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
-  const { handleEvent, startRun } = useStudioStore();
+  const { handleEvent, startConnecting, startRun } = useStudioStore();
 
   const connect = useCallback(
     (runId: string, prompt: string) => {
@@ -14,12 +14,13 @@ export function useStudioWebSocket() {
         wsRef.current.close();
       }
 
-      startRun();
+      startConnecting();
 
       const ws = new WebSocket(`${WS_BASE}/ws/run/${runId}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        startRun();
         ws.send(JSON.stringify({ prompt }));
       };
 
@@ -44,7 +45,7 @@ export function useStudioWebSocket() {
         wsRef.current = null;
       };
     },
-    [handleEvent, startRun]
+    [handleEvent, startConnecting, startRun]
   );
 
   const disconnect = useCallback(() => {

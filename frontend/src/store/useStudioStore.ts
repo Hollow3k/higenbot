@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { AgentName, WsEvent } from "../types/ws";
 import { saveLocalProject } from "../lib/projectStorage";
 
-export type RunStatus = "idle" | "running" | "done" | "error";
+export type RunStatus = "idle" | "connecting" | "running" | "done" | "error";
 
 export interface LogEntry {
   id: string;
@@ -32,6 +32,7 @@ interface StudioState {
   // Actions
   setPrompt: (prompt: string) => void;
   setRunId: (runId: string) => void;
+  startConnecting: () => void;
   startRun: () => void;
   handleEvent: (event: WsEvent) => void;
   selectFile: (path: string | null) => void;
@@ -56,6 +57,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   setRunId: (runId) => set({ runId }),
 
+  startConnecting: () =>
+    set({
+      runStatus: "connecting",
+      currentAgent: null,
+      files: {},
+      selectedFile: null,
+      log: [],
+      qaPassed: null,
+      errorMessage: null,
+    }),
+
   startRun: () =>
     set({
       runStatus: "running",
@@ -73,6 +85,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         case "agent_start":
           return {
             currentAgent: event.agent,
+            runStatus: "running",
             log: [
               ...state.log,
               {
