@@ -94,9 +94,6 @@ function LandingPage() {
               aria-label="Primary"
             >
               <div className="flex items-center justify-start gap-32 pt-1 font-inter">
-                <a href="#about" className="transition hover:text-slate-950">
-                  About
-                </a>
                 <a href="#features" className="transition hover:text-slate-950">
                   Features
                 </a>
@@ -110,9 +107,6 @@ function LandingPage() {
               </a>
 
               <div className="flex items-center justify-end gap-32 pt-1 font-inter">
-                <a href="#pricing" className="transition hover:text-slate-950">
-                  Pricing
-                </a>
                 <button
                   type="button"
                   onClick={handleNavAuth}
