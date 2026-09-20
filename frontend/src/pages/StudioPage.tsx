@@ -69,7 +69,7 @@ export default function StudioPage() {
           <div className="flex-1 flex flex-col items-center justify-center gap-4 text-zinc-500">
             <div className="w-8 h-8 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
             <div className="text-center space-y-1">
-              <p className="text-sm text-zinc-400">Connecting to agents…</p>
+              <p className="text-sm text-zinc-400">Waking up the game studio…</p>
               <p className="text-xs text-zinc-600">
                 Cold starts can take up to a minute — hang tight
               </p>

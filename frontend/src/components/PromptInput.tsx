@@ -4,7 +4,7 @@ import { useStudioWebSocket } from "../hooks/useStudioWebSocket";
 import { apiFetch } from "../lib/api";
 
 export function PromptInput() {
-  const { setPrompt, setRunId, runStatus } = useStudioStore();
+  const { setPrompt, setRunId, startConnecting, runStatus } = useStudioStore();
   const { connect } = useStudioWebSocket();
   const [input, setInput] = useState("");
 
@@ -16,6 +16,8 @@ export function PromptInput() {
     if (!trimmed || isBusy) return;
 
     setPrompt(trimmed);
+    // Show progress while the project API wakes up and creates the run.
+    startConnecting();
 
     // Try to create a project via API (will fail gracefully if not authed/no DB)
     let runId = `run-${Date.now()}`;
