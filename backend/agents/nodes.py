@@ -14,7 +14,7 @@ import tempfile
 import os
 from pathlib import Path
 
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import tool
 from dotenv import load_dotenv
@@ -25,21 +25,24 @@ from agents.state import GraphState
 load_dotenv()
 
 # ── LLM instances ───────────────────────────────────────────────────────────
-# All generation agents use the same Groq-hosted model.
-_GROQ_MODEL   = "qwen/qwen3.8-27b"
-_GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+# Both agents use DeepSeek 4.1 Flash through NVIDIA's OpenAI-compatible NIM endpoint.
+_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+_NVIDIA_MODEL    = "deepseek-ai/deepseek-v4.1-flash"
+_NVIDIA_API_KEY  = os.environ.get("NVIDIA_API_KEY", "")
 
-llm = ChatGroq(
-    model=_GROQ_MODEL,
-    api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
-    max_tokens=4096,
+llm = ChatOpenAI(
+    model=_NVIDIA_MODEL,
+    api_key=_NVIDIA_API_KEY,        # type: ignore[arg-type]
+    base_url=_NVIDIA_BASE_URL,
+    max_tokens=16000,
     temperature=0.7,
 )
 
-programmer_llm = ChatGroq(
-    model=_GROQ_MODEL,
-    api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
-    max_tokens=6000,
+programmer_llm = ChatOpenAI(
+    model=_NVIDIA_MODEL,
+    api_key=_NVIDIA_API_KEY,        # type: ignore[arg-type]
+    base_url=_NVIDIA_BASE_URL,
+    max_tokens=32000,
     temperature=0.2,
 )
 
