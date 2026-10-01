@@ -14,7 +14,7 @@ import tempfile
 import os
 from pathlib import Path
 
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import tool
 from dotenv import load_dotenv
@@ -25,23 +25,20 @@ from agents.state import GraphState
 load_dotenv()
 
 # ── LLM instances ───────────────────────────────────────────────────────────
-# Both nodes use deepseek-ai/deepseek-v4.1-flash via NVIDIA's OpenAI-compatible endpoint.
-_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-_NVIDIA_MODEL    = "deepseek-ai/deepseek-v4.1-flash"
-_NVIDIA_API_KEY  = os.environ.get("NVIDIA_API_KEY", "")
+# All generation agents use the same Groq-hosted model.
+_GROQ_MODEL   = "qwen/qwen3.8-27b"
+_GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
-llm = ChatOpenAI(
-    model=_NVIDIA_MODEL,
-    api_key=_NVIDIA_API_KEY,        # type: ignore[arg-type]
-    base_url=_NVIDIA_BASE_URL,
+llm = ChatGroq(
+    model=_GROQ_MODEL,
+    api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
     max_tokens=16000,
     temperature=0.7,
 )
 
-programmer_llm = ChatOpenAI(
-    model=_NVIDIA_MODEL,
-    api_key=_NVIDIA_API_KEY,        # type: ignore[arg-type]
-    base_url=_NVIDIA_BASE_URL,
+programmer_llm = ChatGroq(
+    model=_GROQ_MODEL,
+    api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
     max_tokens=32000,
     temperature=0.2,
 )
@@ -63,7 +60,7 @@ def _schema_prompt(model_class) -> str:
 
 def _get_content(response) -> str:
     """
-    Extract the text content from a ChatOpenAI response robustly.
+    Extract the text content from a chat model response robustly.
 
     Reasoning models (deepseek-v4.1-flash, kimi-k3, etc.) sometimes return:
     - response.content as a list of dicts with {"type": "text", "text": "..."}
@@ -84,7 +81,7 @@ def _get_content(response) -> str:
 
     content = str(content).strip()
 
-    # Case 2: empty content — look in additional_kwargs (some NVIDIA models)
+    # Case 2: empty content — look in additional_kwargs
     if not content:
         kwargs = getattr(response, "additional_kwargs", {})
         # Check for reasoning_content / content fields
