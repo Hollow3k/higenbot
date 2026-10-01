@@ -12,9 +12,13 @@ import re
 import subprocess
 import tempfile
 import os
+import threading
+import time
+from collections import deque
 from pathlib import Path
 
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import tool
 from dotenv import load_dotenv
@@ -25,26 +29,52 @@ from agents.state import GraphState
 load_dotenv()
 
 # ── LLM instances ───────────────────────────────────────────────────────────
-# Both agents use DeepSeek 4.1 Flash through NVIDIA's OpenAI-compatible NIM endpoint.
-_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-_NVIDIA_MODEL    = "deepseek-ai/deepseek-v4.1-flash"
-_NVIDIA_API_KEY  = os.environ.get("NVIDIA_API_KEY", "")
+# Creative and design agents use Groq; code generation uses Gemini.
+_GROQ_MODEL    = "qwen/qwen3.8-27b"
+_GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
+_GEMINI_MODEL  = "gemini-2.5-flash"
+_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
-llm = ChatOpenAI(
-    model=_NVIDIA_MODEL,
-    api_key=_NVIDIA_API_KEY,        # type: ignore[arg-type]
-    base_url=_NVIDIA_BASE_URL,
-    max_tokens=16000,
+llm = ChatGroq(
+    model=_GROQ_MODEL,
+    api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
+    max_tokens=4096,
     temperature=0.7,
 )
 
-programmer_llm = ChatOpenAI(
-    model=_NVIDIA_MODEL,
-    api_key=_NVIDIA_API_KEY,        # type: ignore[arg-type]
-    base_url=_NVIDIA_BASE_URL,
-    max_tokens=32000,
+programmer_llm = ChatGoogleGenerativeAI(
+    model=_GEMINI_MODEL,
+    google_api_key=_GEMINI_API_KEY, # type: ignore[arg-type]
+    max_output_tokens=32000,
     temperature=0.2,
 )
+
+_PROGRAMMER_REQUEST_LIMIT = 5
+_PROGRAMMER_REQUEST_WINDOW = 60.0
+_programmer_request_times: deque[float] = deque()
+_programmer_request_lock = threading.Lock()
+
+
+def wait_for_programmer_request_slot() -> None:
+    """Throttle programmer requests to five starts per rolling minute."""
+    while True:
+        with _programmer_request_lock:
+            now = time.monotonic()
+            while (
+                _programmer_request_times
+                and now - _programmer_request_times[0] >= _PROGRAMMER_REQUEST_WINDOW
+            ):
+                _programmer_request_times.popleft()
+
+            if len(_programmer_request_times) < _PROGRAMMER_REQUEST_LIMIT:
+                _programmer_request_times.append(now)
+                return
+
+            wait_seconds = _PROGRAMMER_REQUEST_WINDOW - (
+                now - _programmer_request_times[0]
+            )
+
+        time.sleep(max(wait_seconds, 0.01))
 
 
 def _schema_prompt(model_class) -> str:
@@ -280,6 +310,7 @@ def gameplay_programmer_node(state: GraphState) -> dict:
     # Tool-calling loop: keep invoking until the LLM stops calling tools
     max_iterations = 15
     for _ in range(max_iterations):
+        wait_for_programmer_request_slot()
         response = llm_with_tools.invoke(messages)
         messages.append(response)
 

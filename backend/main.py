@@ -306,7 +306,7 @@ async def websocket_edit(websocket: WebSocket, run_id: str):
 
     # Lazy import to avoid circular deps
     from langchain_core.messages import SystemMessage, HumanMessage
-    from agents.nodes import programmer_llm, run_qa_check
+    from agents.nodes import programmer_llm, run_qa_check, wait_for_programmer_request_slot
 
     # Conversation history for multi-turn context
     conversation: list = []
@@ -359,6 +359,7 @@ async def websocket_edit(websocket: WebSocket, run_id: str):
             messages.append(HumanMessage(content=user_msg))
 
             try:
+                wait_for_programmer_request_slot()
                 response = programmer_llm.invoke(messages)
                 response_text = response.content
 
@@ -412,6 +413,7 @@ async def websocket_edit(websocket: WebSocket, run_id: str):
                         retry_messages.extend(conversation)
                         retry_messages.append(HumanMessage(content=retry_msg))
 
+                        wait_for_programmer_request_slot()
                         retry_response = programmer_llm.invoke(retry_messages)
                         retry_text = retry_response.content
                         if isinstance(retry_text, list):
