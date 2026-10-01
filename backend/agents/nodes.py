@@ -14,7 +14,7 @@ import tempfile
 import os
 from pathlib import Path
 
-from langchain.chat_models import init_chat_model
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import tool
 from dotenv import load_dotenv
@@ -24,22 +24,26 @@ from agents.state import GraphState
 
 load_dotenv()
 
-# Map GEMINI_API_KEY to what langchain-google-genai expects
-if os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
-    os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
-
 # ── LLM instances ───────────────────────────────────────────────────────────
-llm = init_chat_model(
-    "openai/gpt-oss-120b",
-    model_provider="groq",
-    max_tokens=4096,
+# Both nodes use moonshotai/kimi-k3 via NVIDIA's OpenAI-compatible endpoint.
+_NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+_NVIDIA_MODEL    = "moonshotai/kimi-k3"
+_NVIDIA_API_KEY  = os.environ.get("NVIDIA_API_KEY", "")
+
+llm = ChatOpenAI(
+    model=_NVIDIA_MODEL,
+    api_key=_NVIDIA_API_KEY,        # type: ignore[arg-type]
+    base_url=_NVIDIA_BASE_URL,
+    max_tokens=16000,
+    temperature=0.7,
 )
 
-# Programmer uses Gemini (higher token limits for code generation)
-programmer_llm = init_chat_model(
-    "gemini-3.5-flash-lite",
-    model_provider="google_genai",
-    max_tokens=8192,
+programmer_llm = ChatOpenAI(
+    model=_NVIDIA_MODEL,
+    api_key=_NVIDIA_API_KEY,        # type: ignore[arg-type]
+    base_url=_NVIDIA_BASE_URL,
+    max_tokens=32000,
+    temperature=0.2,
 )
 
 
