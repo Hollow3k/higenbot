@@ -61,22 +61,62 @@ def _schema_prompt(model_class) -> str:
     return "\n".join(lines)
 
 
+def _get_content(response) -> str:
+    """
+    Extract the text content from a ChatOpenAI response robustly.
+
+    kimi-k3 (and other reasoning models) sometimes return:
+    - response.content as a list of dicts with {"type": "text", "text": "..."}
+    - response.content as empty string with the real text in additional_kwargs
+    - response.content as a plain string (normal case)
+    """
+    content = response.content
+
+    # Case 1: list of content parts (multimodal / reasoning model format)
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(part.get("text", "") or part.get("content", ""))
+            else:
+                parts.append(str(part))
+        content = "".join(parts)
+
+    content = str(content).strip()
+
+    # Case 2: empty content — look in additional_kwargs (some NVIDIA models)
+    if not content:
+        kwargs = getattr(response, "additional_kwargs", {})
+        # Check for reasoning_content / content fields
+        content = (
+            kwargs.get("content", "")
+            or kwargs.get("reasoning_content", "")
+            or ""
+        )
+        # Also check response_metadata
+        meta = getattr(response, "response_metadata", {}) or {}
+        if not content:
+            content = meta.get("content", "") or ""
+
+    return str(content).strip()
+
+
 def _extract_json(text: str) -> dict:
     """Extract JSON from LLM response, handling markdown code blocks and thinking tags."""
-    # Remove <think>...</think> blocks (Qwen reasoning tokens)
+    # Remove <think>...</think> blocks (reasoning tokens)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     # Try to find JSON in code blocks first
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
     if match:
         text = match.group(1)
     text = text.strip()
+    if not text:
+        raise ValueError("LLM returned empty content after stripping think blocks")
     # Remove trailing commas before } or ] (common LLM mistake)
     text = re.sub(r",\s*([}\]])", r"\1", text)
-    # Try parsing
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Last resort: find the first { and last } to extract the JSON object
         start = text.find("{")
         end = text.rfind("}")
         if start != -1 and end != -1:
@@ -90,10 +130,8 @@ def _extract_json(text: str) -> dict:
 
 def creative_director_node(state: GraphState) -> dict:
     """Interpret the user request and produce a structured CreativeVision."""
-
     schema_hint = _schema_prompt(CreativeVision)
-
-    response = llm.invoke([
+    messages = [
         SystemMessage(content=(
             "You are a Creative Director for browser-based games. "
             "Given a user's game idea, produce a clear creative vision that will "
@@ -104,11 +142,24 @@ def creative_director_node(state: GraphState) -> dict:
             "Fill in each field with a real value. No extra text, no markdown, just JSON."
         )),
         HumanMessage(content=state["user_prompt"]),
-    ])
+    ]
 
-    data = _extract_json(response.content)
-    vision = CreativeVision(**data)
-    return {"creative_vision": vision}
+    last_exc = None
+    for attempt in range(3):
+        response = llm.invoke(messages)
+        text = _get_content(response)
+        try:
+            data = _extract_json(text)
+            vision = CreativeVision(**data)
+            return {"creative_vision": vision}
+        except Exception as exc:
+            last_exc = exc
+            messages.append(response)
+            messages.append(HumanMessage(content=(
+                f"Your response caused an error: {exc}\n"
+                "Return ONLY valid JSON matching the schema above. No extra text."
+            )))
+    raise last_exc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,9 +168,7 @@ def creative_director_node(state: GraphState) -> dict:
 
 def game_designer_node(state: GraphState) -> dict:
     """Translate the creative vision into a concrete game-design document."""
-
     schema_hint = _schema_prompt(DesignDoc)
-
     vision = state["creative_vision"]
     vision_text = (
         f"Title: {vision.game_title}\n"
@@ -129,7 +178,7 @@ def game_designer_node(state: GraphState) -> dict:
         f"Target Feel: {vision.target_feel}"
     )
 
-    response = llm.invoke([
+    messages = [
         SystemMessage(content=(
             "You are a Game Designer specializing in browser-based HTML5 Canvas games. "
             "Given the creative vision below, produce a detailed game-design document. "
@@ -140,11 +189,24 @@ def game_designer_node(state: GraphState) -> dict:
             "Fill in each field with a real value. No extra text, no markdown, just JSON."
         )),
         HumanMessage(content=f"Creative Vision:\n{vision_text}"),
-    ])
+    ]
 
-    data = _extract_json(response.content)
-    design = DesignDoc(**data)
-    return {"design_doc": design}
+    last_exc = None
+    for attempt in range(3):
+        response = llm.invoke(messages)
+        text = _get_content(response)
+        try:
+            data = _extract_json(text)
+            design = DesignDoc(**data)
+            return {"design_doc": design}
+        except Exception as exc:
+            last_exc = exc
+            messages.append(response)
+            messages.append(HumanMessage(content=(
+                f"Your response caused an error: {exc}\n"
+                "Return ONLY valid JSON matching the schema above. No extra text."
+            )))
+    raise last_exc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
