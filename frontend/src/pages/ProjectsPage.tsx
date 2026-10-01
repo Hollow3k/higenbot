@@ -22,19 +22,23 @@ export default function ProjectsPage() {
   useEffect(() => {
     async function fetchProjects() {
       // Always load from localStorage first
-      const local = getLocalProjects().map((p) => ({
-        id: p.id,
-        prompt: p.prompt,
-        status: p.status,
-        created_at: p.created_at,
-      }));
+      const local = getLocalProjects()
+        .filter((p) => p.status === "done")
+        .map((p) => ({
+          id: p.id,
+          prompt: p.prompt,
+          status: p.status,
+          created_at: p.created_at,
+        }));
 
       // Try API as well
       try {
         const res = await apiFetch("/api/projects/");
         if (res.ok) {
           const data = await res.json();
-          const apiProjects: Project[] = data.projects ?? [];
+          const apiProjects: Project[] = (data.projects ?? []).filter(
+            (project: Project) => project.status === "done"
+          );
           // Merge: API projects + local projects not already in API
           const apiIds = new Set(apiProjects.map((p) => p.id));
           const merged = [
@@ -129,19 +133,6 @@ export default function ProjectsPage() {
                     })}
                   </p>
                 </div>
-                <span
-                  className={`shrink-0 ml-4 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${
-                    project.status === "done"
-                      ? "bg-emerald-900/30 text-emerald-400"
-                      : project.status === "error"
-                        ? "bg-red-900/30 text-red-400"
-                        : project.status === "running"
-                          ? "bg-amber-900/30 text-amber-400"
-                          : "bg-zinc-800 text-zinc-500"
-                  }`}
-                >
-                  {project.status}
-                </span>
               </Link>
             ))}
           </div>

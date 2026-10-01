@@ -1,7 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { useStudioStore } from "../store/useStudioStore";
 import { useStudioWebSocket } from "../hooks/useStudioWebSocket";
+import { apiFetch } from "../lib/api";
+import { getLocalProject } from "../lib/projectStorage";
 import { AgentStatusBar } from "../components/AgentStatusBar";
 import { ActivityLog } from "../components/ActivityLog";
 import { FileExplorer } from "../components/FileExplorer";
@@ -13,9 +15,13 @@ import { ChatPane } from "../components/ChatPane";
 export default function StudioPage() {
   const { runId } = useParams();
   const location = useLocation();
+  const isExistingProjectRoute = Boolean(runId && !location.state);
+  const [projectLoading, setProjectLoading] = useState(isExistingProjectRoute);
   const { connect } = useStudioWebSocket();
   const runStatus = useStudioStore((s) => s.runStatus);
+  const prompt = useStudioStore((s) => s.prompt);
   const setPrompt = useStudioStore((s) => s.setPrompt);
+  const loadProject = useStudioStore((s) => s.loadProject);
   const reset = useStudioStore((s) => s.reset);
   const hasFiles = useStudioStore(
     (s) => Object.keys(s.files).length > 0
@@ -27,6 +33,39 @@ export default function StudioPage() {
       reset();
     }
   }, [runId, reset]);
+
+  // Load an existing project when opened from the projects list.
+  useEffect(() => {
+    if (!runId || location.state) return;
+
+    const projectId = runId;
+    let cancelled = false;
+    setProjectLoading(true);
+    async function loadExistingProject() {
+      try {
+        try {
+          const response = await apiFetch(`/api/projects/${projectId}`);
+          if (response.ok) {
+            const project = await response.json();
+            if (!cancelled) loadProject(project);
+            return;
+          }
+        } catch {
+          // Fall back to the browser copy when the API is unavailable.
+        }
+
+        const localProject = getLocalProject(projectId);
+        if (!cancelled && localProject) loadProject(localProject);
+      } finally {
+        if (!cancelled) setProjectLoading(false);
+      }
+    }
+
+    loadExistingProject();
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, location.state, loadProject]);
 
   // Auto-start if navigated from projects page with a prompt in state
   useEffect(() => {
@@ -64,7 +103,12 @@ export default function StudioPage() {
 
       {/* Main content area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {runStatus === "connecting" ? (
+        {projectLoading ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 text-zinc-500">
+            <div className="w-8 h-8 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
+            <p className="text-sm text-zinc-400">Loading project...</p>
+          </div>
+        ) : runStatus === "connecting" ? (
           /* Connecting state: full-area spinner */
           <div className="flex-1 flex flex-col items-center justify-center gap-4 text-zinc-500">
             <div className="w-8 h-8 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
@@ -93,8 +137,18 @@ export default function StudioPage() {
         ) : (
           /* Active state: split layout */
           <>
-            {/* Prompt bar stays at top during run */}
-            <PromptInput />
+            {runStatus === "running" ? (
+              <PromptInput />
+            ) : (
+              <div className="border-b border-zinc-800 px-4 py-3">
+                <p className="text-[10px] uppercase tracking-wider text-zinc-600">
+                  Original prompt
+                </p>
+                <p className="mt-1 truncate text-sm text-zinc-300" title={prompt}>
+                  {prompt}
+                </p>
+              </div>
+            )}
 
             {/* Activity log */}
             <div className="border-t border-zinc-800">

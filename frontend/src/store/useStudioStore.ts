@@ -32,6 +32,12 @@ interface StudioState {
   // Actions
   setPrompt: (prompt: string) => void;
   setRunId: (runId: string) => void;
+  loadProject: (project: {
+    id: string;
+    prompt: string;
+    status: string;
+    files: Record<string, string>;
+  }) => void;
   startConnecting: () => void;
   startRun: () => void;
   handleEvent: (event: WsEvent) => void;
@@ -56,6 +62,21 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setPrompt: (prompt) => set({ prompt }),
 
   setRunId: (runId) => set({ runId }),
+
+  loadProject: (project) => {
+    const filePaths = Object.keys(project.files);
+    set({
+      runId: project.id,
+      prompt: project.prompt,
+      runStatus: project.status === "error" ? "error" : "done",
+      files: project.files,
+      selectedFile: filePaths[0] ?? null,
+      currentAgent: null,
+      log: [],
+      qaPassed: project.status !== "error",
+      errorMessage: project.status === "error" ? "This project ended with an error." : null,
+    });
+  },
 
   startConnecting: () =>
     set({
