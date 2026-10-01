@@ -32,14 +32,14 @@ _GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 llm = ChatGroq(
     model=_GROQ_MODEL,
     api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
-    max_tokens=16000,
+    max_tokens=4096,
     temperature=0.7,
 )
 
 programmer_llm = ChatGroq(
     model=_GROQ_MODEL,
     api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
-    max_tokens=16384,
+    max_tokens=6000,
     temperature=0.2,
 )
 
