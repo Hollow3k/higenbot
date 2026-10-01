@@ -25,9 +25,9 @@ from agents.state import GraphState
 load_dotenv()
 
 # ── LLM instances ───────────────────────────────────────────────────────────
-# Both nodes use moonshotai/kimi-k3 via NVIDIA's OpenAI-compatible endpoint.
+# Both nodes use deepseek-ai/deepseek-v4.1-flash via NVIDIA's OpenAI-compatible endpoint.
 _NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-_NVIDIA_MODEL    = "moonshotai/kimi-k3"
+_NVIDIA_MODEL    = "deepseek-ai/deepseek-v4.1-flash"
 _NVIDIA_API_KEY  = os.environ.get("NVIDIA_API_KEY", "")
 
 llm = ChatOpenAI(
@@ -65,7 +65,7 @@ def _get_content(response) -> str:
     """
     Extract the text content from a ChatOpenAI response robustly.
 
-    kimi-k3 (and other reasoning models) sometimes return:
+    Reasoning models (deepseek-v4.1-flash, kimi-k3, etc.) sometimes return:
     - response.content as a list of dicts with {"type": "text", "text": "..."}
     - response.content as empty string with the real text in additional_kwargs
     - response.content as a plain string (normal case)
