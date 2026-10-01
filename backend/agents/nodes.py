@@ -39,7 +39,7 @@ llm = ChatGroq(
 programmer_llm = ChatGroq(
     model=_GROQ_MODEL,
     api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
-    max_tokens=32000,
+    max_tokens=16384,
     temperature=0.2,
 )
 
