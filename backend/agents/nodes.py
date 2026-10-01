@@ -32,7 +32,7 @@ load_dotenv()
 # Creative and design agents use Groq; code generation uses Gemini.
 _GROQ_MODEL    = "qwen/qwen3.8-27b"
 _GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
-_GEMINI_MODEL  = "gemini-2.5-flash"
+_GEMINI_MODEL  = "gemini-3.8-flash"
 _GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 llm = ChatGroq(
