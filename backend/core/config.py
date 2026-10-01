@@ -17,31 +17,45 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # ── Database ────────────────────────────────────────────────────────────
-    # Supabase "Transaction mode" connection string (port 6543) for async use.
-    # Example: postgresql+asyncpg://postgres:[password]@db.[ref].supabase.co:6543/postgres
     DATABASE_URL: str = ""
 
-    # ── AI / LLM ────────────────────────────────────────────────────────────
+    # ── AI / LLM — NVIDIA NIM (all nodes) ─────────────────────────────────
+    # All four nodes (creative director, designer, programmer, reviewer) use
+    # the same NVIDIA-hosted model via their OpenAI-compatible endpoint.
+    NVIDIA_API_KEY: str = ""
+    NVIDIA_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
+    NVIDIA_MODEL: str = "moonshotai/kimi-k3"
+
+    # Token limits per role — kimi-k3 supports up to 131072 output tokens,
+    # but we cap conservatively to avoid cost spikes.
+    PLANNER_MAX_TOKENS: int = 16000    # director, designer, reviewer
+    PROGRAMMER_MAX_TOKENS: int = 32000  # programmer (large code output)
+
+    # reasoning_effort: "default" | "max" — set to "max" for best quality,
+    # "default" to reduce latency/cost on the planner nodes.
+    PLANNER_REASONING_EFFORT: str = "max"
+    PROGRAMMER_REASONING_EFFORT: str = "max"
+
+    # Legacy keys kept so existing .env files don't break
     GROQ_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
+    PLANNER_PROVIDER: str = "openai"   # unused — kept for compat
+    PLANNER_MODEL: str = "moonshotai/kimi-k3"  # unused — kept for compat
+    PROGRAMMER_PROVIDER: str = "openai"  # unused — kept for compat
+    PROGRAMMER_MODEL: str = "moonshotai/kimi-k3"  # unused — kept for compat
+    GEMINI_THINKING_BUDGET: int = 0     # unused — kept for compat
+
+    # ── QA ──────────────────────────────────────────────────────────────────
+    # Total number of QA runs allowed (initial attempt + retries).
+    # e.g. 4 = 1 initial + 3 retries
+    QA_MAX_ATTEMPTS: int = 4
 
     # ── Supabase Auth ───────────────────────────────────────────────────────
-    # Project URL — shown on the Supabase dashboard under Settings → API.
-    # Example: https://xyzcompany.supabase.co
     SUPABASE_URL: str = ""
-
-    # Public anon key — Settings → API → Project API keys.
-    # Used for Supabase Auth verification requests.
     SUPABASE_ANON_KEY: str = ""
-
-    # JWT Secret — Settings → API → JWT Settings → "JWT Secret".
-    # The backend uses this to *verify* tokens that Supabase issued; it never
-    # creates tokens itself.
     SUPABASE_JWT_SECRET: str = ""
 
     # ── CORS ────────────────────────────────────────────────────────────────
-    # Comma-separated list of allowed origins for CORS.
-    # In development this is overridden by the explicit list in main.py; you
-    # can also set it here for production (e.g. "https://higenbot.vercel.app").
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:4173"
 
     @property
@@ -49,15 +63,11 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
 
     # ── App metadata ────────────────────────────────────────────────────────
-    APP_ENV: str = "development"  # "development" | "production"
+    APP_ENV: str = "development"
 
-    # Tell pydantic-settings to load from a .env file sitting next to this
-    # project.  env_file is resolved relative to the *working directory* when
-    # uvicorn is started (i.e., the backend/ folder).
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        # Allow extra fields in .env without raising validation errors
         extra="ignore",
     )
 

@@ -160,21 +160,46 @@ export const useStudioStore = create<StudioState>((set, get) => ({
             });
           }
 
+          // Build a log entry that shows real QA result
+          const qaErrors     = event.qa_errors     ?? [];
+          const qaViolations = event.spec_violations ?? [];
+          const allIssues    = [...qaErrors, ...qaViolations];
+
+          const newEntries: LogEntry[] = [];
+
+          // Summary entry
+          newEntries.push({
+            id: nextId(),
+            type: "info",
+            message: event.qa_passed
+              ? "✓ Build complete — QA passed"
+              : `✗ Build complete — QA failed (${allIssues.length} issue${allIssues.length !== 1 ? "s" : ""})`,
+            timestamp: event.timestamp,
+          });
+
+          // Show up to 5 individual issues in the log
+          for (const issue of allIssues.slice(0, 5)) {
+            newEntries.push({
+              id: nextId(),
+              type: "error",
+              message: issue,
+              timestamp: event.timestamp,
+            });
+          }
+          if (allIssues.length > 5) {
+            newEntries.push({
+              id: nextId(),
+              type: "error",
+              message: `… and ${allIssues.length - 5} more issue(s)`,
+              timestamp: event.timestamp,
+            });
+          }
+
           return {
             runStatus: "done",
             currentAgent: null,
             qaPassed: event.qa_passed,
-            log: [
-              ...state.log,
-              {
-                id: nextId(),
-                type: "info",
-                message: event.qa_passed
-                  ? "Build complete — QA passed"
-                  : "Build complete — QA failed",
-                timestamp: event.timestamp,
-              },
-            ],
+            log: [...state.log, ...newEntries],
           };
         }
 

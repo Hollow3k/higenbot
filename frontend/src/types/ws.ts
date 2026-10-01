@@ -47,6 +47,10 @@ export interface FileWrittenEvent {
 export interface RunCompleteEvent {
   type: typeof WsMessageType.RunComplete;
   qa_passed: boolean;
+  /** TypeScript compilation errors from the final QA run (may be empty) */
+  qa_errors?: string[];
+  /** Static-check and spec-review violations from the final QA run (may be empty) */
+  spec_violations?: string[];
   timestamp: string;
 }
 

@@ -21,7 +21,10 @@ export function downloadFile(path: string, content: string) {
 
 /**
  * Download all files as a .zip archive.
- * Uses JSZip-compatible manual zip creation (no dependency needed for small files).
+ *
+ * Includes scaffold source files (src/input.ts etc.), DESIGN.md, and
+ * tsconfig.json so the downloaded project compiles with `tsc` locally.
+ * Unknown file types (e.g. .md, scaffold .ts) are included as plain text.
  */
 export async function downloadAllAsZip(files: Record<string, string>) {
   // Dynamically import JSZip — it's lightweight and handles paths correctly

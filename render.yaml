@@ -3,7 +3,13 @@ services:
     name: higenbot-api
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
+    # Install Node + TypeScript so tsc is available for QA checks.
+    # pip install is run after nvm/node setup via shell chaining.
+    buildCommand: |
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash - &&
+      apt-get install -y nodejs &&
+      npm install -g typescript &&
+      pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
@@ -17,6 +23,8 @@ services:
       - key: SUPABASE_JWT_SECRET
         sync: false
       - key: GEMINI_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
         sync: false
       - key: APP_ENV
         value: production
