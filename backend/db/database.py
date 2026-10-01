@@ -15,6 +15,14 @@ _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
+def _async_database_url(database_url: str) -> str:
+    """Use the asyncpg driver for PostgreSQL URLs in every deployment format."""
+    for prefix in ("postgresql+psycopg://", "postgresql://", "postgres://"):
+        if database_url.startswith(prefix):
+            return "postgresql+asyncpg://" + database_url[len(prefix):]
+    return database_url
+
+
 def get_engine() -> AsyncEngine:
     global _engine
 
@@ -26,7 +34,7 @@ def get_engine() -> AsyncEngine:
             )
 
         _engine = create_async_engine(
-            settings.DATABASE_URL,
+            _async_database_url(settings.DATABASE_URL),
             echo=settings.APP_ENV == "development",
             pool_pre_ping=True,
         )
