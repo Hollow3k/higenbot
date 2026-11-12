@@ -18,7 +18,7 @@ from collections import deque
 from pathlib import Path
 
 from langchain_groq import ChatGroq
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import tool
 from dotenv import load_dotenv
@@ -42,11 +42,18 @@ llm = ChatGroq(
     temperature=0.7,
 )
 
-programmer_llm = ChatGoogleGenerativeAI(
-    model=_GEMINI_MODEL,
-    google_api_key=_GEMINI_API_KEY, # type: ignore[arg-type]
-    max_output_tokens=32000,
+_OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
+_OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+
+# Programmer node runs on OpenRouter (OpenAI-compatible API).
+programmer_llm = ChatOpenAI(
+    model=_OPENROUTER_MODEL,
+    api_key=_OPENROUTER_API_KEY,    # type: ignore[arg-type]
+    base_url="https://openrouter.ai/api/v1",
+    max_tokens=32000,
     temperature=0.2,
+    timeout=300,
+    max_retries=2,
 )
 
 _PROGRAMMER_REQUEST_LIMIT = 5
