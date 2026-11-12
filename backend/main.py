@@ -374,6 +374,25 @@ async def websocket_edit(websocket: WebSocket, run_id: str):
                 updated_files = _parse_file_blocks(response_text)
 
                 if not updated_files:
+                    # One retry, reminding the model of the exact format
+                    print(f"[edit] parse failed, raw reply (first 1500 chars):\n{str(response_text)[:1500]}")
+                    wait_for_programmer_request_slot()
+                    fmt_response = programmer_llm.invoke(messages + [HumanMessage(content=(
+                        "Your reply could not be parsed. Reply again with ONLY the changed files, "
+                        "each formatted exactly as:\n--- path/to/file.ts ---\n<full file content>\n--- end ---\n"
+                        "No explanations, no markdown fences."
+                    ))])
+                    fmt_text = fmt_response.content
+                    if isinstance(fmt_text, list):
+                        fmt_text = "".join(
+                            part.get("text", "") if isinstance(part, dict) else str(part)
+                            for part in fmt_text
+                        )
+                    updated_files = _parse_file_blocks(fmt_text)
+                    if updated_files:
+                        response_text = fmt_text
+
+                if not updated_files:
                     await _send(websocket, {
                         "type": "edit_error",
                         "message": "Could not parse file changes from response",
@@ -493,14 +512,32 @@ def _parse_file_blocks(text: str) -> dict[str, str]:
     import re
     files: dict[str, str] = {}
 
+    # Normalise: line endings and reasoning-model <think> blocks
+    text = text.replace("\r\n", "\n")
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+
+    def _strip_fence(body: str) -> str:
+        body = body.strip()
+        m = re.match(r"^```[\w+-]*\n(.*?)\n?```$", body, re.DOTALL)
+        return (m.group(1) if m else body).strip()
+
     # Pattern: --- filepath --- \n content \n --- end ---
-    pattern = r"---\s+(.+?)\s+---\n(.*?)\n---\s*end\s*---"
-    matches = re.findall(pattern, text, re.DOTALL)
+    pattern = r"^[ \t]*-{3,}[ \t]*([^\n]+?\.\w+)[ \t]*-{3,}[ \t]*\n(.*?)\n[ \t]*-{3,}[ \t]*end[ \t]*-{3,}"
+    matches = re.findall(pattern, text, re.DOTALL | re.MULTILINE | re.IGNORECASE)
+
+    if not matches:
+        # Tolerate a missing "--- end ---": split on header lines instead
+        header = re.compile(r"^[ \t]*-{3,}[ \t]*([^\n]+?\.\w+)[ \t]*-{3,}[ \t]*$", re.MULTILINE)
+        heads = list(header.finditer(text))
+        for i, h in enumerate(heads):
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+            body = re.sub(r"\n[ \t]*-{3,}[ \t]*end[ \t]*-{3,}\s*$", "", text[h.end():end].rstrip(), flags=re.IGNORECASE)
+            matches.append((h.group(1), body))
 
     if matches:
         for path, content in matches:
-            path = path.strip()
-            files[path] = content.strip()
+            path = path.strip().strip("`")
+            files[path] = _strip_fence(content)
     else:
         # Fallback: try to find ```filename patterns
         code_pattern = r"```(?:\w+)?\s*\n?//\s*(.+?)\n(.*?)```"
