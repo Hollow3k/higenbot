@@ -17,44 +17,61 @@ import time
 from collections import deque
 from pathlib import Path
 
-from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.tools import tool
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from dotenv import load_dotenv
 
-from agents.schemas import CreativeVision, DesignDoc, QAReport
+from agents.briefs import compact_json, design_brief, vision_brief
+from agents.files import finalize_project, parse_file_blocks, sanitize_files
+from agents.limits import (
+    CREATIVE_MAX_OUTPUT,
+    DESIGNER_MAX_OUTPUT,
+    MAX_INPUT_TOKENS,
+    MAX_PROMPT_CHARS,
+    PLANNER_REASONING_EFFORT,
+    PROGRAMMER_MAX_OUTPUT,
+    PROGRAMMER_REASONING_EFFORT,
+    BudgetExceeded,
+    estimate_tokens,
+    render_files,
+)
+from agents.schemas import CreativeVision, DesignDoc, QAReport, schema_hint
 from agents.state import GraphState
 
 load_dotenv()
 
 # ── LLM instances ───────────────────────────────────────────────────────────
-# Creative and design agents use Groq; code generation uses Gemini.
-_GROQ_MODEL    = "qwen/qwen3.8-27b"
-_GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
-_GEMINI_MODEL  = "gemini-3.8-flash"
-_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-
-llm = ChatGroq(
-    model=_GROQ_MODEL,
-    api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
-    max_tokens=4096,
-    temperature=0.7,
-)
-
+# All nodes run on OpenRouter (OpenAI-compatible API) with the same model.
 _OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 _OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+_OPENROUTER_URL     = "https://openrouter.ai/api/v1"
 
-# Programmer node runs on OpenRouter (OpenAI-compatible API).
-programmer_llm = ChatOpenAI(
-    model=_OPENROUTER_MODEL,
-    api_key=_OPENROUTER_API_KEY,    # type: ignore[arg-type]
-    base_url="https://openrouter.ai/api/v1",
-    max_tokens=32000,
-    temperature=0.2,
-    timeout=300,
-    max_retries=2,
-)
+def _make_llm(max_tokens: int, temperature: float, effort: str, timeout: int = 240) -> ChatOpenAI:
+    """
+    One OpenRouter client. max_tokens includes reasoning tokens, so each caller
+    gets a budget from agents.limits that leaves room for both the thinking and
+    the answer. Context and output sizes are documented in agents/limits.py.
+    """
+    return ChatOpenAI(
+        model=_OPENROUTER_MODEL,
+        api_key=_OPENROUTER_API_KEY,    # type: ignore[arg-type]
+        base_url=_OPENROUTER_URL,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        # A stalled free-tier request must fail fast. Worst case per call is
+        # timeout * (1 + max_retries); measured healthy calls take 15-210s.
+        timeout=timeout,
+        max_retries=1,
+        extra_body={"reasoning": {"effort": effort}},
+    )
+
+
+# Creative Director: imaginative, so a higher temperature.
+creative_llm = _make_llm(CREATIVE_MAX_OUTPUT, 0.8, PLANNER_REASONING_EFFORT)
+# Game Designer: must produce consistent numbers, so a lower temperature.
+designer_llm = _make_llm(DESIGNER_MAX_OUTPUT, 0.5, PLANNER_REASONING_EFFORT)
+# Gameplay Programmer and the /ws/edit endpoint.
+programmer_llm = _make_llm(PROGRAMMER_MAX_OUTPUT, 0.2, PROGRAMMER_REASONING_EFFORT, timeout=420)
 
 _PROGRAMMER_REQUEST_LIMIT = 5
 _PROGRAMMER_REQUEST_WINDOW = 60.0
@@ -82,20 +99,6 @@ def wait_for_programmer_request_slot() -> None:
             )
 
         time.sleep(max(wait_seconds, 0.01))
-
-
-def _schema_prompt(model_class) -> str:
-    """Build a clear prompt showing the expected JSON fields, not the raw schema."""
-    fields = model_class.model_fields
-    lines = ["{"]
-    for name, field in fields.items():
-        desc = field.description or ""
-        if field.annotation == list or (hasattr(field.annotation, '__origin__') and field.annotation.__origin__ is list):
-            lines.append(f'  "{name}": ["..."],  // {desc}')
-        else:
-            lines.append(f'  "{name}": "...",  // {desc}')
-    lines.append("}")
-    return "\n".join(lines)
 
 
 def _get_content(response) -> str:
@@ -162,185 +165,327 @@ def _extract_json(text: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Shared helper: ask for JSON, validate against a Pydantic model, retry on error
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MAX_PLANNER_ATTEMPTS = 3
+
+
+def _finish_reason(response) -> str:
+    meta = getattr(response, "response_metadata", {}) or {}
+    return str(meta.get("finish_reason", "") or "")
+
+
+def log_call(label: str, response, started: float) -> None:
+    """One diagnostic line per LLM call: time, finish reason, token usage, reply size."""
+    usage = getattr(response, "usage_metadata", None) or {}
+    details = usage.get("output_token_details") or {}
+    print(
+        f"[llm] {label}: {time.monotonic() - started:.0f}s "
+        f"finish={_finish_reason(response) or '?'} "
+        f"in={usage.get('input_tokens', '?')} out={usage.get('output_tokens', '?')} "
+        f"reasoning={details.get('reasoning', '?')} reply_chars={len(_get_content(response))}",
+        flush=True,
+    )
+
+
+def _structured_call(model, messages: list, model_class):
+    """
+    Invoke `model`, parse the reply as JSON, validate it with `model_class`.
+    On failure the validation error is sent back so the model can correct it.
+    """
+    if estimate_tokens("".join(str(m.content) for m in messages)) > MAX_INPUT_TOKENS:
+        raise BudgetExceeded("Planner input is larger than the input budget.")
+
+    last_exc: Exception | None = None
+    for _ in range(_MAX_PLANNER_ATTEMPTS):
+        wait_for_programmer_request_slot()
+        started = time.monotonic()
+        response = model.invoke(messages)
+        log_call(model_class.__name__, response, started)
+        text = _get_content(response)
+        try:
+            if _finish_reason(response) == "length":
+                raise ValueError(
+                    "The reply was cut off by the output limit. "
+                    "Make every field shorter and use fewer list items."
+                )
+            return model_class(**_extract_json(text))
+        except Exception as exc:
+            last_exc = exc
+            messages = messages + [
+                AIMessage(content=text[:8000]),
+                HumanMessage(content=(
+                    f"That reply was rejected:\n{str(exc)[:1500]}\n\n"
+                    "Return the complete corrected JSON object only, matching the format exactly."
+                )),
+            ]
+    assert last_exc is not None
+    raise last_exc
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Node 1: Creative Director
 # ─────────────────────────────────────────────────────────────────────────────
 
+_CREATIVE_SYSTEM = (
+    "You are the Creative Director of a small browser-game studio. Turn the player's idea into a "
+    "creative vision that makes the finished game look and feel polished.\n\n"
+    "RULES\n"
+    "- Stay faithful to the idea. Keep everything the player names (characters, teams, mechanics, "
+    "setting, camera, controls). Add detail; never replace their idea with a different game.\n"
+    "- The game is drawn entirely with Canvas 2D: shapes, gradients, glow, particles, text. "
+    "No images, no downloaded fonts, no libraries. Sound comes from WebAudio oscillators.\n"
+    "- Choose a restrained palette: one dark or muted background, one hero color for the player, "
+    "one danger color, one accent. Hex codes only. HUD text must contrast strongly with the background.\n"
+    "- Prefer a distinctive, specific look over generic neon unless the idea calls for it.\n"
+    "- Be concrete. Every field must change what gets built; no filler adjectives.\n\n"
+    "Respond with ONLY one JSON object in exactly this shape (comments show limits):\n"
+)
+
+
 def creative_director_node(state: GraphState) -> dict:
     """Interpret the user request and produce a structured CreativeVision."""
-    schema_hint = _schema_prompt(CreativeVision)
+    prompt = state["user_prompt"].strip()[:MAX_PROMPT_CHARS]
     messages = [
-        SystemMessage(content=(
-            "You are a Creative Director for browser-based games. "
-            "Given a user's game idea, produce a clear creative vision that will "
-            "guide the rest of the development team. Be specific and imaginative. "
-            "The game will be implemented as a single-page TypeScript/HTML5 Canvas game.\n\n"
-            "You MUST respond with ONLY a valid JSON object matching this format:\n"
-            f"{schema_hint}\n\n"
-            "Fill in each field with a real value. No extra text, no markdown, just JSON."
-        )),
-        HumanMessage(content=state["user_prompt"]),
+        SystemMessage(content=_CREATIVE_SYSTEM + schema_hint(CreativeVision)),
+        HumanMessage(content=f"GAME IDEA:\n{prompt}"),
     ]
-
-    last_exc = None
-    for attempt in range(3):
-        response = llm.invoke(messages)
-        text = _get_content(response)
-        try:
-            data = _extract_json(text)
-            vision = CreativeVision(**data)
-            return {"creative_vision": vision}
-        except Exception as exc:
-            last_exc = exc
-            messages.append(response)
-            messages.append(HumanMessage(content=(
-                f"Your response caused an error: {exc}\n"
-                "Return ONLY valid JSON matching the schema above. No extra text."
-            )))
-    raise last_exc
+    return {"creative_vision": _structured_call(creative_llm, messages, CreativeVision)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Node 2: Game Designer
 # ─────────────────────────────────────────────────────────────────────────────
 
+_DESIGNER_SYSTEM = (
+    "You are the Game Designer. Turn the creative vision into a specification that a programmer can "
+    "implement in ONE TypeScript file of 500-900 lines without making any design decisions.\n\n"
+    "RULES\n"
+    "- The player's original request is binding. If it states controls or mechanics (for example "
+    "'shoot where I click'), the design must implement them exactly. The vision only adds style.\n"
+    "- Scope tightly: one core mechanic done well beats many half-built ones. Use 3-6 entity types "
+    "and 2-5 mechanics for a typical game. Everything you list WILL be implemented.\n"
+    "- Numbers, not adjectives: speeds in px/s, durations in seconds, sizes in px, counts. "
+    "Put every balance number in `tunables` (at least 6) and keep entity values consistent with them.\n"
+    "- Canvas coordinates: origin top-left, y grows downward. Everything must fit inside the canvas size you choose.\n"
+    "- The game is playable on the first frame with no menu. Describe what happens in the first 10 seconds.\n"
+    "- Fair and finishable: the first 20 seconds are easy, difficulty ramps gradually, the player can "
+    "always see what killed them, and there is a restart control (R key or click).\n"
+    "- Game feel: every hit, pickup, score and loss gets particles, shake or flash, plus a WebAudio sound.\n"
+    "- Exactly one entity has role 'player': the thing the player controls (for a mouse-aimed game this "
+    "may be the shooter or the crosshair).\n\n"
+    "Respond with ONLY one JSON object in exactly this shape (comments show limits):\n"
+)
+
+
 def game_designer_node(state: GraphState) -> dict:
     """Translate the creative vision into a concrete game-design document."""
-    schema_hint = _schema_prompt(DesignDoc)
     vision = state["creative_vision"]
-    vision_text = (
-        f"Title: {vision.game_title}\n"
-        f"Theme: {vision.theme}\n"
-        f"Visual Style: {vision.visual_style}\n"
-        f"Mood: {vision.mood}\n"
-        f"Target Feel: {vision.target_feel}"
-    )
-
+    prompt = state["user_prompt"].strip()[:MAX_PROMPT_CHARS]
     messages = [
-        SystemMessage(content=(
-            "You are a Game Designer specializing in browser-based HTML5 Canvas games. "
-            "Given the creative vision below, produce a detailed game-design document. "
-            "Be practical — the game must be implementable in a single TypeScript file "
-            "with an HTML5 Canvas, no external game engine or asset loading.\n\n"
-            "You MUST respond with ONLY a valid JSON object matching this format:\n"
-            f"{schema_hint}\n\n"
-            "Fill in each field with a real value. No extra text, no markdown, just JSON."
+        SystemMessage(content=_DESIGNER_SYSTEM + schema_hint(DesignDoc)),
+        HumanMessage(content=(
+            f"ORIGINAL REQUEST FROM THE PLAYER:\n{prompt}\n\n"
+            f"CREATIVE VISION:\n{vision_brief(vision)}"
         )),
-        HumanMessage(content=f"Creative Vision:\n{vision_text}"),
     ]
-
-    last_exc = None
-    for attempt in range(3):
-        response = llm.invoke(messages)
-        text = _get_content(response)
-        try:
-            data = _extract_json(text)
-            design = DesignDoc(**data)
-            return {"design_doc": design}
-        except Exception as exc:
-            last_exc = exc
-            messages.append(response)
-            messages.append(HumanMessage(content=(
-                f"Your response caused an error: {exc}\n"
-                "Return ONLY valid JSON matching the schema above. No extra text."
-            )))
-    raise last_exc
+    return {"design_doc": _structured_call(designer_llm, messages, DesignDoc)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Node 3: Gameplay Programmer
 # ─────────────────────────────────────────────────────────────────────────────
 
-@tool
-def write_file(path: str, content: str) -> str:
-    """Write a file to the project. Path should be relative (e.g. 'src/main.ts')."""
-    return json.dumps({"written": path, "size": len(content)})
+PROGRAMMER_SYSTEM = (
+    "You are a senior TypeScript game programmer. Implement the design brief as a complete, polished, "
+    "bug-free browser game on an HTML5 Canvas.\n\n"
+    "OUTPUT FORMAT (strict). Reply with ONLY these two blocks, with no explanation and no markdown fences:\n"
+    "--- index.html ---\n"
+    "<complete file>\n"
+    "--- end ---\n"
+    "--- src/main.ts ---\n"
+    "<complete file>\n"
+    "--- end ---\n\n"
+    "HARD REQUIREMENTS\n"
+    "1. Exactly these two files. tsconfig.json is added automatically. No import or export statements, "
+    "no other files, no CDN scripts, no images, no web fonts (use 'monospace' or 'sans-serif').\n"
+    "2. index.html: a minimal page with <canvas id=\"game\" width=\"W\" height=\"H\"> using the brief's "
+    "canvas size, body background set to the palette background, the canvas centered and scaled to fit "
+    "(CSS: width:min(100vw, calc(100vh * W / H)); height:auto), and <script src=\"dist/main.js\"></script> "
+    "as the last element of body.\n"
+    "3. src/main.ts: wrap ALL code in an IIFE `(() => { ... })();` so names never clash with browser "
+    "globals. Strict TypeScript: type every function parameter and return value and avoid implicit any. "
+    "Get the canvas and context with EXACTLY these two lines (a null check would not carry into your functions):\n"
+    "   const canvas = document.getElementById('game') as HTMLCanvasElement;\n"
+    "   const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;\n"
+    "4. Copy the CONSTANTS from the brief verbatim at the top of the IIFE and use them everywhere. "
+    "Do not scatter other magic numbers for balance.\n"
+    "5. Loop: requestAnimationFrame, dt in seconds clamped to 0.05. Every movement is speed * dt, never per frame.\n"
+    "6. The game is already playing on the first frame (no title screen). On win or loss show an overlay "
+    "with the result, the score and 'Press R or click to restart'. Restart must reset all state completely.\n"
+    "7. Input: keep pressed keys in a Set via window keydown/keyup; preventDefault for arrow keys and Space; "
+    "clear the Set on window blur. Use pointer events. Convert pointer positions to canvas coordinates with "
+    "x = (e.clientX - rect.left) * canvas.width / rect.width (same for y), because the canvas is scaled by CSS.\n"
+    "8. Audio: create the AudioContext lazily on the first keydown or pointerdown (browsers block it earlier), "
+    "wrap it in try/catch, play short OscillatorNode + GainNode envelopes, master volume at most 0.25.\n"
+    "9. Correctness: clamp the player inside the canvas, never spawn entities on top of the player, remove "
+    "entities that leave the screen or die, cap particles at 300, and avoid division by zero when normalizing vectors.\n"
+    "10. Visuals: use ONLY the palette colors (and lighter or darker tints of them). Draw a gradient background "
+    "plus one subtle moving or textured layer, entities as shapes with the described details, glow via "
+    "shadowBlur (reset it to 0 after drawing each glowing object), particles, screen shake via ctx.translate, "
+    "and a readable HUD in bold monospace with a text shadow.\n"
+    "11. Implement EVERY mechanic, entity, spawn rule, scoring rule, difficulty step, feedback effect and edge "
+    "case in the brief. Never replace the core mechanic with something simpler.\n"
+    "12. Length: 500 to 900 lines, compact and readable, no dead code. Never exceed 1000 lines. "
+    "Always finish every block; an unfinished file is a failure.\n\n"
+    "Suggested order inside the IIFE: constants, types, state, helpers, input, audio, reset/spawn, "
+    "update, collisions, particles, render, loop.\n"
+    "Before answering, mentally play the first 10 seconds and the restart path, and fix any bug you find."
+)
+
+EDIT_SYSTEM = (
+    "You are a senior TypeScript game programmer editing an existing HTML5 Canvas game. "
+    "You receive the current files and one change request.\n\n"
+    "OUTPUT FORMAT (strict). Reply with ONLY the files you changed, each as:\n"
+    "--- path/to/file ---\n"
+    "<complete new file content>\n"
+    "--- end ---\n"
+    "No explanation, no markdown fences, no diffs. Every file you return must be complete.\n\n"
+    "RULES\n"
+    "- Only index.html and src/*.ts files exist. src/main.ts must stay one plain script wrapped in an IIFE, "
+    "with no import or export. tsconfig.json is managed automatically; never return it.\n"
+    "- Make the smallest change that fully delivers the request, and keep every other behavior working.\n"
+    "- Stay strictly typed (no implicit any). Reuse the existing constants and helpers instead of adding duplicates.\n"
+    "- If the request is about input (clicking, aiming, keys), make sure it works on the scaled canvas by "
+    "converting pointer positions with x = (e.clientX - rect.left) * canvas.width / rect.width.\n"
+    "- Keep the file compact. Never exceed 1000 lines. Finish every block; an unfinished file is a failure.\n"
+    "- Before answering, trace the new behavior through update and render once and fix any bug you find."
+)
+
+_REQUIRED_FILES = ("index.html", "src/main.ts")
+_MAX_PROGRAMMER_ATTEMPTS = 2
+
+
+def _error_lines(errors: list[str]) -> str:
+    seen: list[str] = []
+    for e in errors:
+        e = e.strip()[:300]
+        if e and e not in seen:
+            seen.append(e)
+        if len(seen) >= 15:
+            break
+    return "\n".join(f"- {e}" for e in seen)
+
+
+def _programmer_user_message(state: GraphState) -> str:
+    """First pass: the brief. Retry pass: the previous code plus the errors to fix."""
+    brief = (
+        "CREATIVE BRIEF\n" + vision_brief(state["creative_vision"])
+        + "\n\nDESIGN BRIEF\n" + design_brief(state["design_doc"])
+    )
+    previous = {
+        p: c for p, c in (state.get("files") or {}).items() if p != "tsconfig.json"
+    }
+    errors = state.get("errors") or []
+    if not (previous and errors):
+        return brief + "\n\nWrite the game now."
+
+    budget = MAX_INPUT_TOKENS - estimate_tokens(PROGRAMMER_SYSTEM) - 2_000
+    code = render_files(previous, budget - estimate_tokens(brief))
+    return (
+        "Your previous version failed these checks:\n"
+        f"{_error_lines(errors)}\n\n"
+        "CURRENT CODE\n"
+        f"{code}\n\n"
+        f"{brief}\n\n"
+        "Fix every error and keep everything else working. Reply with the COMPLETE corrected "
+        "index.html and src/main.ts (full files, not a diff)."
+    )
 
 
 def gameplay_programmer_node(state: GraphState) -> dict:
-    """Generate the game source files using a tool-calling loop."""
+    """Generate (or repair) the game source files."""
+    user_msg = _programmer_user_message(state)
+    if estimate_tokens(PROGRAMMER_SYSTEM + user_msg) > MAX_INPUT_TOKENS:
+        raise BudgetExceeded("Programmer input is larger than the input budget.")
 
-    vision = state["creative_vision"]
-    design = state["design_doc"]
-    errors = state.get("errors", [])
-
-    # Build context for the programmer
-    context_parts = [
-        f"Game Title: {vision.game_title}",
-        f"Theme: {vision.theme}",
-        f"Visual Style: {vision.visual_style}",
-        f"Mood: {vision.mood}",
-        f"Target Feel: {vision.target_feel}",
-        "",
-        f"Player Controls: {design.player_controls}",
-        f"Core Loop: {design.core_loop}",
-        f"Win Condition: {design.win_condition}",
-        f"Lose Condition: {design.lose_condition}",
-        f"Entities: {', '.join(design.entities)}",
-        f"Level Structure: {design.level_structure}",
-    ]
-
-    # If retrying, include previous errors for the LLM to fix
-    if errors:
-        context_parts.append("")
-        context_parts.append("PREVIOUS ERRORS TO FIX:")
-        for err in errors:
-            context_parts.append(f"  - {err}")
-
-    system_prompt = (
-        "You are a senior TypeScript gameplay programmer. "
-        "Generate a complete, working browser game using HTML5 Canvas and TypeScript. "
-        "Use the write_file tool to create each file. You MUST create at minimum:\n"
-        "  1. index.html — the HTML shell with a <canvas> element\n"
-        "  2. src/main.ts — the game entry point and loop\n"
-        "  3. tsconfig.json — MUST include: {\"compilerOptions\":{\"target\":\"ES2020\",\"module\":\"ES2020\",\"lib\":[\"ES2020\",\"DOM\"],\"outDir\":\"dist\",\"strict\":true}}\n\n"
-        "CRITICAL RULES:\n"
-        "- The game MUST start in a PLAYING state immediately on load (no menus, no splash screens)\n"
-        "- No external dependencies (no npm packages, no CDN scripts)\n"
-        "- All game logic in TypeScript, rendered to a <canvas>\n"
-        "- The HTML file should reference the compiled JS via <script src='dist/main.js'></script>\n"
-        "- Use requestAnimationFrame for the game loop\n"
-        "- The game must be interactive from the first frame\n"
-        "- Keep code simple and under 300 lines total\n"
-        "- If previous errors are listed, fix them in this iteration"
-    )
-
-    # Bind the tool and run a tool-calling loop
-    llm_with_tools = programmer_llm.bind_tools([write_file])
-
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content="\n".join(context_parts)),
-    ]
-
+    messages = [SystemMessage(content=PROGRAMMER_SYSTEM), HumanMessage(content=user_msg)]
     files: dict[str, str] = {}
 
-    # Tool-calling loop: keep invoking until the LLM stops calling tools
-    max_iterations = 15
-    for _ in range(max_iterations):
+    for attempt in range(_MAX_PROGRAMMER_ATTEMPTS):
         wait_for_programmer_request_slot()
-        response = llm_with_tools.invoke(messages)
-        messages.append(response)
+        started = time.monotonic()
+        response = programmer_llm.invoke(messages)
+        log_call(f"programmer attempt {attempt + 1}", response, started)
+        text = _get_content(response)
+        truncated = _finish_reason(response) == "length"
 
-        if not response.tool_calls:
+        files, problems = sanitize_files(parse_file_blocks(text))
+        missing = [p for p in _REQUIRED_FILES if p not in files]
+        if truncated:
+            problems.append(
+                "The reply hit the output limit and was cut off. Write more compact code "
+                "(under 700 lines) and finish every block."
+            )
+        if missing:
+            problems.append(f"Missing required file(s): {', '.join(missing)}.")
+
+        if problems:
+            print(f"[programmer] attempt {attempt + 1} problems: {problems}", flush=True)
+            if not files:
+                print(f"[programmer] reply start: {text[:600]!r}", flush=True)
+
+        if not problems or attempt == _MAX_PROGRAMMER_ATTEMPTS - 1:
             break
 
-        # Process each tool call
-        for tool_call in response.tool_calls:
-            if tool_call["name"] == "write_file":
-                args = tool_call["args"]
-                file_path = args["path"]
-                file_content = args["content"]
-                files[file_path] = file_content
+        # Retry once, telling the model what was wrong. The rejected reply is not
+        # re-sent (it can be very large); the original request is enough.
+        messages = [
+            SystemMessage(content=PROGRAMMER_SYSTEM),
+            HumanMessage(content=(
+                user_msg
+                + "\n\nYOUR PREVIOUS REPLY WAS REJECTED:\n"
+                + "\n".join(f"- {p}" for p in problems)
+                + "\nReply again in the exact required format."
+            )),
+        ]
 
-                # Feed the tool result back
-                from langchain_core.messages import ToolMessage
-                messages.append(ToolMessage(
-                    content=json.dumps({"written": file_path, "size": len(file_content)}),
-                    tool_call_id=tool_call["id"],
-                ))
+    if not files:
+        return {"files": {}, "errors": []}
+    return {"files": finalize_project(files), "errors": []}
 
-    return {"files": files, "errors": []}
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Structural checks (cheap, deterministic, run before/alongside tsc)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def structural_errors(files: dict[str, str]) -> list[str]:
+    """Catch problems tsc cannot: a game that compiles but would not run in the preview."""
+    errs: list[str] = []
+    html = files.get("index.html", "")
+    ts = files.get("src/main.ts", "")
+
+    if not html:
+        errs.append("index.html is missing.")
+    elif "<canvas" not in html.lower():
+        errs.append("index.html has no <canvas> element.")
+
+    if not ts:
+        errs.append("src/main.ts is missing.")
+        return errs
+
+    if re.search(r"^\s*(import|export)\b", ts, re.MULTILINE):
+        errs.append("src/main.ts must not use import or export; the preview runs it as a plain script.")
+    if "getContext" not in ts:
+        errs.append("src/main.ts never calls getContext('2d'), so nothing can be drawn.")
+    if "requestAnimationFrame" not in ts:
+        errs.append("src/main.ts has no requestAnimationFrame game loop.")
+    if not re.search(r"addEventListener\(\s*['\"](key|pointer|mouse|touch|click)", ts):
+        errs.append("src/main.ts registers no keyboard, mouse, pointer or touch input handler.")
+    if ts.count("\n") > 1200:
+        errs.append("src/main.ts is over 1200 lines; make it more compact.")
+    return errs
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Node 4: QA Tester
@@ -405,6 +550,7 @@ def qa_tester_node(state: GraphState) -> dict:
         except (subprocess.TimeoutExpired, FileNotFoundError) as e:
             tsc_errors = [f"Failed to run tsc: {str(e)}"]
 
+    tsc_errors = structural_errors(files) + tsc_errors
     passed = len(tsc_errors) == 0
 
     # Generate suggestions via LLM if there are errors
@@ -474,6 +620,7 @@ def run_qa_check(files: dict[str, str]) -> QAReport:
         except (subprocess.TimeoutExpired, FileNotFoundError) as e:
             tsc_errors = [f"Failed to run tsc: {str(e)}"]
 
+    tsc_errors = structural_errors(files) + tsc_errors
     passed = len(tsc_errors) == 0
     suggestions = []
     if not passed:
