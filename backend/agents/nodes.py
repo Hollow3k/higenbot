@@ -17,7 +17,6 @@ import time
 from collections import deque
 from pathlib import Path
 
-from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import tool
@@ -29,27 +28,28 @@ from agents.state import GraphState
 load_dotenv()
 
 # ── LLM instances ───────────────────────────────────────────────────────────
-# Creative and design agents use Groq; code generation uses Gemini.
-_GROQ_MODEL    = "qwen/qwen3.8-27b"
-_GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
-_GEMINI_MODEL  = "gemini-3.8-flash"
-_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-
-llm = ChatGroq(
-    model=_GROQ_MODEL,
-    api_key=_GROQ_API_KEY,          # type: ignore[arg-type]
-    max_tokens=4096,
-    temperature=0.7,
-)
-
+# All nodes run on OpenRouter (OpenAI-compatible API) with the same model.
 _OPENROUTER_MODEL   = os.environ.get("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
 _OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+_OPENROUTER_URL     = "https://openrouter.ai/api/v1"
 
-# Programmer node runs on OpenRouter (OpenAI-compatible API).
+# Creative Director and Game Designer. The larger max_tokens leaves room for
+# the model's reasoning tokens in addition to the JSON answer.
+llm = ChatOpenAI(
+    model=_OPENROUTER_MODEL,
+    api_key=_OPENROUTER_API_KEY,    # type: ignore[arg-type]
+    base_url=_OPENROUTER_URL,
+    max_tokens=8192,
+    temperature=0.7,
+    timeout=300,
+    max_retries=2,
+)
+
+# Gameplay Programmer and the /ws/edit endpoint.
 programmer_llm = ChatOpenAI(
     model=_OPENROUTER_MODEL,
     api_key=_OPENROUTER_API_KEY,    # type: ignore[arg-type]
-    base_url="https://openrouter.ai/api/v1",
+    base_url=_OPENROUTER_URL,
     max_tokens=32000,
     temperature=0.2,
     timeout=300,

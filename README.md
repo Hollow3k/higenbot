@@ -79,7 +79,7 @@ Once generated, you can request changes through a built-in chat interface that m
 |-------|-----------|
 | Frontend | React, TypeScript, Tailwind CSS, Zustand, Vite |
 | Backend | FastAPI, LangGraph, LangChain, WebSockets, SQLAlchemy |
-| AI Models | Gemini 2.5 Flash (code generation), Groq GPT-oss-120b (planning agents) |
+| AI Models | NVIDIA Nemotron 3 Ultra via OpenRouter (all agents) |
 | Database | Supabase (PostgreSQL) |
 | Auth | Supabase Auth (email + Google OAuth) |
 | Deployment | Render (backend), Vercel (frontend) |
@@ -146,8 +146,8 @@ npm run dev
 | Variable | Description |
 |----------|-------------|
 | DATABASE_URL | Supabase PostgreSQL connection string |
-| GROQ_API_KEY | Groq API key for planning agents |
-| GEMINI_API_KEY | Google Gemini API key for code generation |
+| OPENROUTER_API_KEY | OpenRouter API key, used by all agents |
+| OPENROUTER_MODEL | Optional model override (default `nvidia/nemotron-3-ultra-550b-a55b:free`) |
 | SUPABASE_URL | Supabase project URL |
 | SUPABASE_ANON_KEY | Supabase public anon key |
 | SUPABASE_JWT_SECRET | Supabase JWT secret for token verification |
